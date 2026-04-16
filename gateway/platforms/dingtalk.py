@@ -201,6 +201,8 @@ class DingTalkAdapter(BasePlatformAdapter):
 
         # Store session webhook for reply routing (validate origin to prevent SSRF)
         session_webhook = getattr(message, "session_webhook", None) or ""
+        logger.info("[%s] session_webhook raw value: %r", self.name, session_webhook)
+
         if session_webhook and chat_id and _DINGTALK_WEBHOOK_RE.match(session_webhook):
             if len(self._session_webhooks) >= _SESSION_WEBHOOKS_MAX:
                 # Evict oldest entry to cap memory growth
