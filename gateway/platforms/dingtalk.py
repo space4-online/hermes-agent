@@ -27,11 +27,13 @@ from typing import Any, Dict, Optional
 
 try:
     import dingtalk_stream
-    from dingtalk_stream import ChatbotHandler, ChatbotMessage
+    from dingtalk_stream import AsyncChatbotHandler, ChatbotMessage
+
     DINGTALK_STREAM_AVAILABLE = True
 except ImportError:
     DINGTALK_STREAM_AVAILABLE = False
     dingtalk_stream = None  # type: ignore[assignment]
+    AsyncChatbotHandler = object  # type: ignore[assignment,misc]
 
 try:
     import httpx
@@ -133,7 +135,7 @@ class DingTalkAdapter(BasePlatformAdapter):
         while self._running:
             try:
                 logger.debug("[%s] Starting stream client...", self.name)
-                await asyncio.to_thread(self._stream_client.start)
+                await self._stream_client.start()
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -305,8 +307,8 @@ class DingTalkAdapter(BasePlatformAdapter):
 # Internal stream handler
 # ---------------------------------------------------------------------------
 
-class _IncomingHandler(ChatbotHandler if DINGTALK_STREAM_AVAILABLE else object):
-    """dingtalk-stream ChatbotHandler that forwards messages to the adapter."""
+class _IncomingHandler(AsyncChatbotHandler if DINGTALK_STREAM_AVAILABLE else object):
+    """dingtalk-stream AsyncChatbotHandler that forwards messages to the adapter."""
 
     def __init__(self, adapter: DingTalkAdapter, loop: asyncio.AbstractEventLoop):
         if DINGTALK_STREAM_AVAILABLE:
@@ -314,15 +316,19 @@ class _IncomingHandler(ChatbotHandler if DINGTALK_STREAM_AVAILABLE else object):
         self._adapter = adapter
         self._loop = loop
 
-    def process(self, message: "ChatbotMessage"):
-        """Called by dingtalk-stream in its thread when a message arrives.
+    def process(self, callback_message: Any):
+        """Called by dingtalk-stream in a thread pool when a message arrives.
 
-        Schedules the async handler on the main event loop.
+        raw_process() (from AsyncChatbotHandler) handles ACK automatically and
+        submits this method to a ThreadPoolExecutor, so blocking future.result()
+        here only blocks a pool worker thread, not the event loop.
         """
+        message = ChatbotMessage.from_dict(callback_message.data)
+
         loop = self._loop
         if loop is None or loop.is_closed():
             logger.error("[DingTalk] Event loop unavailable, cannot dispatch message")
-            return dingtalk_stream.AckMessage.STATUS_OK, "OK"
+            return
 
         future = asyncio.run_coroutine_threadsafe(self._adapter._on_message(message), loop)
         try:
@@ -330,4 +336,3 @@ class _IncomingHandler(ChatbotHandler if DINGTALK_STREAM_AVAILABLE else object):
         except Exception:
             logger.exception("[DingTalk] Error processing incoming message")
 
-        return dingtalk_stream.AckMessage.STATUS_OK, "OK"
