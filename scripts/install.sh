@@ -26,8 +26,8 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
+REPO_URL_SSH="git@github.com:space4-online/hermes-agent.git"
+REPO_URL_HTTPS="https://github.com/space4-online/hermes-agent.git"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 INSTALL_DIR="${HERMES_INSTALL_DIR:-$HERMES_HOME/hermes-agent}"
 PYTHON_VERSION="3.11"
@@ -903,6 +903,15 @@ install_deps() {
     log_success "All dependencies installed"
 }
 
+install_optional_deps() {
+    log_info "Installing optional platform dependencies..."
+
+    # 钉钉支持
+    $UV_CMD pip install dingtalk-stream
+    log_success "dingtalk-stream installed"
+}
+
+
 setup_path() {
     log_info "Setting up hermes command..."
 
@@ -1390,6 +1399,7 @@ main() {
     clone_repo
     setup_venv
     install_deps
+    install_optional_deps
     install_node_deps
     setup_path
     copy_config_templates
