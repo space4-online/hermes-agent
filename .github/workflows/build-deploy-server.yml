@@ -50,8 +50,9 @@ jobs:
               --exclude='./hermes_cli/web_dist' \
               --exclude='./.webpack-cache' \
               --exclude='./tinker-atropos' \
-              -czf /tmp/hermes-deploy.tar.gz -C . .
-          ls -lh /tmp/hermes-deploy.tar.gz
+              --exclude='./hermes-deploy.tar.gz' \
+              -czf hermes-deploy.tar.gz -C . .
+          ls -lh hermes-deploy.tar.gz
 
       - name: Copy package to server
         if: ${{ github.triggering_actor == 'paladnix' }}
@@ -61,7 +62,7 @@ jobs:
           username: ${{ vars.HERMES_USER }}
           key: ${{ secrets.HERMES_DEPLOY_KEY }}
           port: 22
-          source: "/tmp/hermes-deploy.tar.gz"
+          source: "hermes-deploy.tar.gz"
           target: "/tmp/"
 
       - name: Deploy on server
