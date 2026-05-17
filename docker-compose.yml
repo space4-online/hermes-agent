@@ -53,9 +53,9 @@ services:
         APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
-        # 基础镜像指向阿里云 ACR 同步份（去掉上游 digest）
-        UV_IMAGE: ${UV_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/uv:0.11.6-python3.13-trixie}
-        GOSU_IMAGE: ${GOSU_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/gosu:1.19-trixie}
+        # 基础镜像指向阿里云 ACR 同步份（docker-image-sync 规则：源路径中的 / 转换为 -）
+        UV_IMAGE: ${UV_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/ghcr.io-astral-sh-uv:0.11.6-python3.13-trixie}
+        GOSU_IMAGE: ${GOSU_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/tianon-gosu:1.19-trixie}
         DEBIAN_IMAGE: ${DEBIAN_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/debian:13.4}
     image: hermes-agent
     container_name: hermes
