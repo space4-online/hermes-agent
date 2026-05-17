@@ -37,7 +37,7 @@ jobs:
 
       - name: Create deployment package
         run: |
-          # 打包仓库，排除大体积/构建产物/敏感目录
+          # 输出到 workspace 外面，避免 tar 读写同一目录导致 "file changed as we read it"
           tar --exclude='./.git' \
               --exclude='./.github' \
               --exclude='./node_modules' \
@@ -50,8 +50,8 @@ jobs:
               --exclude='./hermes_cli/web_dist' \
               --exclude='./.webpack-cache' \
               --exclude='./tinker-atropos' \
-              --exclude='./hermes-deploy.tar.gz' \
-              -czf hermes-deploy.tar.gz -C . .
+              -czf "${RUNNER_TEMP}/hermes-deploy.tar.gz" -C . .
+          mv "${RUNNER_TEMP}/hermes-deploy.tar.gz" ./hermes-deploy.tar.gz
           ls -lh hermes-deploy.tar.gz
 
       - name: Copy package to server
