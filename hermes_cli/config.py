@@ -1193,6 +1193,33 @@ DEFAULT_CONFIG = {
         },
     },
 
+    # Pluggable backend for the four on-disk SQLite stores
+    # (state.db, kanban.db, memory_store.db, response_store.db).
+    # Default is sqlite (file-based) — set backend=mysql to keep the
+    # whole agent stateless on disk and centralise data in an external
+    # MySQL service.  See docs/storage-mysql.md and sql/mysql/ for the
+    # canonical metadata DDL.
+    "storage": {
+        "backend": "sqlite",  # sqlite | mysql
+        "mysql": {
+            "host": "127.0.0.1",
+            "port": 3306,
+            "user": "hermes",
+            "password": "",
+            "database": "hermes",
+            "charset": "utf8mb4",
+            "pool_size": 5,
+            "connect_timeout": 10,
+            "autocommit": False,
+            "ssl_disabled": False,
+            # Optional: route specific stores to dedicated databases.
+            # e.g. {"state": "hermes_state", "kanban": "hermes_kanban"}
+            "per_store_database": {},
+            # Free-form extra params forwarded to pymysql.connect.
+            "extra": {},
+        },
+    },
+
     # Honcho AI-native memory -- reads ~/.honcho/config.json as single source of truth.
     # This section is only needed for hermes-specific overrides; everything else
     # (apiKey, workspace, peerName, sessions, enabled) comes from the global config.

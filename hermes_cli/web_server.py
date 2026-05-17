@@ -15,6 +15,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -2892,15 +2893,138 @@ class SkillToggle(BaseModel):
     enabled: bool
 
 
+class SkillUpdate(BaseModel):
+    content: str
+
+
+class SkillCreate(BaseModel):
+    name: str
+    category: Optional[str] = None
+    content: str
+
+
+# ---------------------------------------------------------------------------
+# Skill scanner with full file paths.
+#
+# Mirrors ``tools.skills_tool._find_all_skills`` but additionally returns
+# the absolute SKILL.md path and source dir so the dashboard can render a
+# detail panel and gate write operations to the user-owned tree.
+# ---------------------------------------------------------------------------
+
+
+def _scan_skills_with_paths() -> List[Dict[str, Any]]:
+    """Return list of ``{name, description, category, path, source_dir}``.
+
+    The first occurrence of any skill name wins (local SKILLS_DIR takes
+    precedence over external dirs), matching ``_find_all_skills`` semantics.
+    """
+    from tools.skills_tool import (
+        SKILLS_DIR,
+        _EXCLUDED_SKILL_DIRS,
+        _parse_frontmatter,
+        _get_category_from_path,
+        skill_matches_platform,
+        MAX_NAME_LENGTH,
+        MAX_DESCRIPTION_LENGTH,
+    )
+    from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
+
+    dirs_to_scan: List[Path] = []
+    if SKILLS_DIR.exists():
+        dirs_to_scan.append(SKILLS_DIR)
+    dirs_to_scan.extend(get_external_skills_dirs())
+
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for scan_dir in dirs_to_scan:
+        for skill_md in iter_skill_index_files(scan_dir, "SKILL.md"):
+            if any(part in _EXCLUDED_SKILL_DIRS for part in skill_md.parts):
+                continue
+            try:
+                content = skill_md.read_text(encoding="utf-8")[:4000]
+                frontmatter, body = _parse_frontmatter(content)
+                if not skill_matches_platform(frontmatter):
+                    continue
+                name = frontmatter.get("name", skill_md.parent.name)[:MAX_NAME_LENGTH]
+                if name in seen:
+                    continue
+                description = frontmatter.get("description", "")
+                if not description:
+                    for line in body.strip().split("\n"):
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            description = line
+                            break
+                if len(description) > MAX_DESCRIPTION_LENGTH:
+                    description = description[: MAX_DESCRIPTION_LENGTH - 3] + "..."
+                category = _get_category_from_path(skill_md)
+                seen.add(name)
+                out.append({
+                    "name": name,
+                    "description": description,
+                    "category": category,
+                    "path": str(skill_md),
+                    "source_dir": str(scan_dir),
+                })
+            except (UnicodeDecodeError, PermissionError):
+                continue
+            except Exception:
+                continue
+    return out
+
+
+def _user_skills_dir() -> Path:
+    """~/.hermes/skills/ — the only writable skill root."""
+    from tools.skills_tool import SKILLS_DIR
+    return SKILLS_DIR
+
+
+def _is_path_writable(skill_md_path: Path) -> bool:
+    """True iff ``skill_md_path`` lives under the user's SKILLS_DIR tree."""
+    try:
+        skill_md_path.resolve().relative_to(_user_skills_dir().resolve())
+        return True
+    except (ValueError, FileNotFoundError, OSError):
+        return False
+
+
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
+_SKILL_CATEGORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-/]{0,63}$")
+
+
+def _validate_skill_segment(value: str, kind: str, pattern) -> str:
+    if not value or not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"{kind} required")
+    cleaned = value.strip()
+    if not pattern.match(cleaned):
+        raise HTTPException(status_code=400, detail=f"invalid {kind}")
+    if ".." in cleaned.split("/"):
+        raise HTTPException(status_code=400, detail=f"{kind} must not contain '..'")
+    return cleaned
+
+
+def _resolve_skill_record(name: str) -> Dict[str, Any]:
+    """Find the skill metadata + path, or raise 404."""
+    for s in _scan_skills_with_paths():
+        if s["name"] == name:
+            return s
+    raise HTTPException(status_code=404, detail=f"skill not found: {name}")
+
+
 @app.get("/api/skills")
 async def get_skills():
-    from tools.skills_tool import _find_all_skills
     from hermes_cli.skills_config import get_disabled_skills
     config = load_config()
     disabled = get_disabled_skills(config)
-    skills = _find_all_skills(skip_disabled=True)
+    user_root = _user_skills_dir().resolve()
+    skills = _scan_skills_with_paths()
     for s in skills:
         s["enabled"] = s["name"] not in disabled
+        try:
+            Path(s["path"]).resolve().relative_to(user_root)
+            s["writable"] = True
+        except (ValueError, FileNotFoundError, OSError):
+            s["writable"] = False
     return skills
 
 
@@ -2915,6 +3039,121 @@ async def toggle_skill(body: SkillToggle):
         disabled.add(body.name)
     save_disabled_skills(config, disabled)
     return {"ok": True, "name": body.name, "enabled": body.enabled}
+
+
+@app.get("/api/skills/{name}")
+async def get_skill_detail(name: str):
+    from tools.skills_tool import _parse_frontmatter
+    record = _resolve_skill_record(name)
+    skill_path = Path(record["path"])
+    try:
+        raw = skill_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"failed to read SKILL.md: {exc}")
+    frontmatter, _body = _parse_frontmatter(raw)
+    return {
+        "name": record["name"],
+        "category": record["category"],
+        "description": record["description"],
+        "path": record["path"],
+        "source_dir": record["source_dir"],
+        "writable": _is_path_writable(skill_path),
+        "content": raw,
+        "frontmatter": frontmatter,
+    }
+
+
+@app.put("/api/skills/{name}")
+async def update_skill(name: str, body: SkillUpdate):
+    record = _resolve_skill_record(name)
+    skill_path = Path(record["path"])
+    if not _is_path_writable(skill_path):
+        raise HTTPException(
+            status_code=403,
+            detail="skill is read-only (not under ~/.hermes/skills/)",
+        )
+    if body.content is None:
+        raise HTTPException(status_code=400, detail="content required")
+    try:
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        skill_path.write_text(body.content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"write failed: {exc}")
+    return {"ok": True, "name": name, "path": str(skill_path)}
+
+
+@app.post("/api/skills")
+async def create_skill(body: SkillCreate):
+    name = _validate_skill_segment(body.name, "name", _SKILL_NAME_RE)
+    category: Optional[str] = None
+    if body.category:
+        category = _validate_skill_segment(body.category, "category", _SKILL_CATEGORY_RE)
+    user_root = _user_skills_dir()
+    target_dir = user_root / category / name if category else user_root / name
+    target_md = target_dir / "SKILL.md"
+    # Defensive: refuse to escape the user root.  Resolve the parent chain
+    # without requiring the leaf to exist yet.
+    try:
+        target_dir.resolve().relative_to(user_root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="path escapes SKILLS_DIR")
+    except (FileNotFoundError, OSError):
+        # parent doesn't exist yet — fall back to a string-prefix check
+        if not str(target_dir).startswith(str(user_root)):
+            raise HTTPException(status_code=400, detail="path escapes SKILLS_DIR")
+    if target_md.exists():
+        raise HTTPException(status_code=409, detail=f"skill already exists: {name}")
+    if any(s["name"] == name for s in _scan_skills_with_paths()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"skill name '{name}' already used by another source dir",
+        )
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_md.write_text(body.content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"create failed: {exc}")
+    return {
+        "ok": True,
+        "name": name,
+        "category": category,
+        "path": str(target_md),
+    }
+
+
+@app.delete("/api/skills/{name}")
+async def delete_skill(name: str):
+    import shutil as _shutil
+    from hermes_cli.skills_config import get_disabled_skills, save_disabled_skills
+    record = _resolve_skill_record(name)
+    skill_path = Path(record["path"])
+    if not _is_path_writable(skill_path):
+        raise HTTPException(
+            status_code=403,
+            detail="skill is read-only (not under ~/.hermes/skills/)",
+        )
+    skill_dir = skill_path.parent
+    user_root = _user_skills_dir().resolve()
+    try:
+        skill_dir.resolve().relative_to(user_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="refusing to delete outside SKILLS_DIR")
+    if skill_dir.resolve() == user_root:
+        raise HTTPException(status_code=400, detail="refusing to delete SKILLS_DIR itself")
+    try:
+        _shutil.rmtree(skill_dir)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"delete failed: {exc}")
+    # Drop any stale entry from the disabled list
+    try:
+        config = load_config()
+        disabled = get_disabled_skills(config)
+        if name in disabled:
+            disabled.discard(name)
+            save_disabled_skills(config, disabled)
+    except Exception:
+        pass
+    return {"ok": True, "name": name}
 
 
 @app.get("/api/tools/toolsets")
@@ -2947,6 +3186,238 @@ async def get_toolsets():
             "tools": tools,
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Memory store (holographic) admin API.
+#
+# Backed by ``plugins.memory.holographic.store.MemoryStore`` which already
+# routes transparently between the SQLite default and MySQL when
+# ``hermes_db.get_backend() == 'mysql'``.  We keep a single lazy instance
+# per dashboard process; the store's RLock makes it safe across the
+# FastAPI thread pool.
+# ---------------------------------------------------------------------------
+
+_MEMORY_STORE_LOCK = threading.Lock()
+_MEMORY_STORE = None  # type: Any
+
+
+def _get_memory_store():
+    """Return the dashboard-wide MemoryStore singleton (lazy init)."""
+    global _MEMORY_STORE
+    if _MEMORY_STORE is not None:
+        return _MEMORY_STORE
+    with _MEMORY_STORE_LOCK:
+        if _MEMORY_STORE is None:
+            from plugins.memory.holographic.store import MemoryStore
+            _MEMORY_STORE = MemoryStore()
+    return _MEMORY_STORE
+
+
+class MemoryFactCreate(BaseModel):
+    content: str
+    category: Optional[str] = "general"
+    tags: Optional[str] = ""
+
+
+class MemoryFactPatch(BaseModel):
+    content: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[str] = None
+    trust_delta: Optional[float] = None
+
+
+class MemoryBankRebuild(BaseModel):
+    category: str
+
+
+@app.get("/api/memory/facts")
+async def memory_list_facts(
+    q: Optional[str] = None,
+    category: Optional[str] = None,
+    min_trust: float = 0.0,
+    limit: int = 50,
+):
+    store = _get_memory_store()
+    if limit <= 0 or limit > 500:
+        limit = 50
+    if q and q.strip():
+        rows = store.search_facts(
+            q.strip(),
+            category=category,
+            min_trust=min_trust if min_trust > 0 else 0.0,
+            limit=limit,
+        )
+    else:
+        rows = store.list_facts(
+            category=category,
+            min_trust=min_trust,
+            limit=limit,
+        )
+    return {"facts": rows, "count": len(rows)}
+
+
+@app.get("/api/memory/facts/{fact_id}")
+async def memory_get_fact(fact_id: int):
+    store = _get_memory_store()
+    row = store._conn.execute(
+        """
+        SELECT fact_id, content, category, tags, trust_score,
+               retrieval_count, helpful_count, created_at, updated_at
+        FROM facts WHERE fact_id = ?
+        """,
+        (fact_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"fact not found: {fact_id}")
+    fact = dict(row)
+    ent_rows = store._conn.execute(
+        """
+        SELECT e.entity_id, e.name, e.entity_type
+        FROM entities e
+        JOIN fact_entities fe ON fe.entity_id = e.entity_id
+        WHERE fe.fact_id = ?
+        ORDER BY e.name
+        """,
+        (fact_id,),
+    ).fetchall()
+    fact["entities"] = [dict(r) for r in ent_rows]
+    return fact
+
+
+@app.post("/api/memory/facts")
+async def memory_create_fact(body: MemoryFactCreate):
+    if not body.content or not body.content.strip():
+        raise HTTPException(status_code=400, detail="content required")
+    store = _get_memory_store()
+    try:
+        fact_id = store.add_fact(
+            content=body.content,
+            category=body.category or "general",
+            tags=body.tags or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _log.exception("POST /api/memory/facts failed")
+        raise HTTPException(status_code=500, detail=f"add_fact failed: {exc}")
+    return {"ok": True, "fact_id": int(fact_id)}
+
+
+@app.patch("/api/memory/facts/{fact_id}")
+async def memory_update_fact(fact_id: int, body: MemoryFactPatch):
+    store = _get_memory_store()
+    try:
+        ok = store.update_fact(
+            fact_id=fact_id,
+            content=body.content,
+            tags=body.tags,
+            category=body.category,
+            trust_delta=body.trust_delta,
+        )
+    except Exception as exc:
+        _log.exception("PATCH /api/memory/facts/%s failed", fact_id)
+        raise HTTPException(status_code=500, detail=f"update_fact failed: {exc}")
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"fact not found: {fact_id}")
+    return {"ok": True, "fact_id": fact_id}
+
+
+@app.delete("/api/memory/facts/{fact_id}")
+async def memory_delete_fact(fact_id: int):
+    store = _get_memory_store()
+    try:
+        ok = store.remove_fact(fact_id)
+    except Exception as exc:
+        _log.exception("DELETE /api/memory/facts/%s failed", fact_id)
+        raise HTTPException(status_code=500, detail=f"remove_fact failed: {exc}")
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"fact not found: {fact_id}")
+    return {"ok": True, "fact_id": fact_id}
+
+
+@app.get("/api/memory/entities")
+async def memory_list_entities(limit: int = 200):
+    store = _get_memory_store()
+    if limit <= 0 or limit > 1000:
+        limit = 200
+    rows = store._conn.execute(
+        """
+        SELECT e.entity_id, e.name, e.entity_type, e.aliases, e.created_at,
+               COUNT(fe.fact_id) AS fact_count
+        FROM entities e
+        LEFT JOIN fact_entities fe ON fe.entity_id = e.entity_id
+        GROUP BY e.entity_id, e.name, e.entity_type, e.aliases, e.created_at
+        ORDER BY fact_count DESC, e.name
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return {"entities": [dict(r) for r in rows], "count": len(rows)}
+
+
+@app.get("/api/memory/banks")
+async def memory_list_banks():
+    store = _get_memory_store()
+    rows = store._conn.execute(
+        """
+        SELECT bank_name, dim, fact_count, updated_at
+        FROM memory_banks
+        ORDER BY bank_name
+        """
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        # ``cat:<category>`` is the only naming scheme produced by
+        # MemoryStore._rebuild_bank.  Surface the bare category to make
+        # the client-side rebuild call straightforward.
+        bank_name = d.get("bank_name") or ""
+        d["category"] = bank_name[4:] if bank_name.startswith("cat:") else bank_name
+        out.append(d)
+    return {"banks": out, "count": len(out)}
+
+
+@app.get("/api/memory/stats")
+async def memory_stats():
+    store = _get_memory_store()
+    fact_count = store._conn.execute(
+        "SELECT COUNT(*) AS c FROM facts"
+    ).fetchone()["c"]
+    entity_count = store._conn.execute(
+        "SELECT COUNT(*) AS c FROM entities"
+    ).fetchone()["c"]
+    bank_count = store._conn.execute(
+        "SELECT COUNT(*) AS c FROM memory_banks"
+    ).fetchone()["c"]
+    cat_rows = store._conn.execute(
+        """
+        SELECT category, COUNT(*) AS c
+        FROM facts
+        GROUP BY category
+        ORDER BY c DESC, category
+        """
+    ).fetchall()
+    return {
+        "facts": int(fact_count),
+        "entities": int(entity_count),
+        "banks": int(bank_count),
+        "categories": [{"category": r["category"], "count": int(r["c"])} for r in cat_rows],
+        "backend": getattr(store, "_backend", "sqlite"),
+    }
+
+
+@app.post("/api/memory/banks/rebuild")
+async def memory_rebuild_bank(body: MemoryBankRebuild):
+    if not body.category or not body.category.strip():
+        raise HTTPException(status_code=400, detail="category required")
+    store = _get_memory_store()
+    try:
+        store._rebuild_bank(body.category.strip())
+    except Exception as exc:
+        _log.exception("POST /api/memory/banks/rebuild failed")
+        raise HTTPException(status_code=500, detail=f"rebuild failed: {exc}")
+    return {"ok": True, "category": body.category.strip()}
 
 
 # ---------------------------------------------------------------------------

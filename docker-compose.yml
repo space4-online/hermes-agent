@@ -22,17 +22,63 @@
 #     this on an internet-facing host.
 #
 services:
+  mysql:
+    image: ${MYSQL_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/mysql:8.0}
+    container_name: hermes-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=caching_sha2_password
+      - --max-connections=200
+    env_file:
+      - /home/server/env/hermes.env
+    ports:
+      # 仅绑 127.0.0.1，公网不可达；gateway 走 host 网络访问 127.0.0.1:3306
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - /data/hermes-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   gateway:
-    build: .
+    build:
+      context: .
+      args:
+        # 构建期国内加速（如 GH Runner 上构建可设为空）
+        APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        # 基础镜像指向阿里云 ACR 同步份（去掉上游 digest）
+        UV_IMAGE: ${UV_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/uv:0.11.6-python3.13-trixie}
+        GOSU_IMAGE: ${GOSU_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/gosu:1.19-trixie}
+        DEBIAN_IMAGE: ${DEBIAN_IMAGE:-crpi-vz0a3h0d9w77e3sp.cn-shanghai.personal.cr.aliyuncs.com/my_workflow/debian:13.4}
     image: hermes-agent
     container_name: hermes
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file:
+      # 提供 MYSQL_USER / MYSQL_PASSWORD / MYSQL_DATABASE 以供下方变量展开
+      - /home/server/env/hermes.env
     volumes:
       - ~/.hermes:/opt/data
     environment:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
+      # ----- MySQL 后端（hermes_db 切换为 mysql）-----
+      - HERMES_DB_BACKEND=mysql
+      - HERMES_DB_HOST=127.0.0.1
+      - HERMES_DB_PORT=3306
+      - HERMES_DB_NAME=${MYSQL_DATABASE:-hermes}
+      - HERMES_DB_USER=${MYSQL_USER:-hermes}
+      - HERMES_DB_PASSWORD=${MYSQL_PASSWORD}
       # To expose the OpenAI-compatible API server beyond localhost,
       # uncomment BOTH lines (API_SERVER_KEY is mandatory for auth):
       # - API_SERVER_HOST=0.0.0.0

@@ -1,8 +1,22 @@
 """
-SQLite-backed fact store with entity resolution and trust scoring.
+Fact store with entity resolution and trust scoring.
 Single-user Hermes memory store plugin.
+
+Backend selection follows ``hermes_db.get_backend()``:
+* ``sqlite`` (default): on-disk ``memory_store.db`` under HERMES_HOME with
+  the same WAL/NFS fallback used by state.db / kanban.db.  All original
+  SQL paths remain untouched (zero-regression guard).
+* ``mysql``: routed to the central MySQL service via
+  ``hermes_db.connect('memory_store')``.  Schema is provisioned by
+  ``python -m hermes_db.migrate --store memory_store``; we do NOT run
+  DDL here.  Two structural differences vs SQLite are handled inline:
+  - LONGTEXT cannot be UNIQUE in MySQL, so a sha256 ``content_hash``
+    column carries the dedup invariant.
+  - FTS5 ``facts_fts`` is replaced by ``FULLTEXT(content, tags) WITH
+    PARSER ngram`` directly on the ``facts`` table.
 """
 
+import hashlib
 import re
 import sqlite3
 import threading
@@ -104,29 +118,42 @@ class MemoryStore:
         default_trust: float = 0.5,
         hrr_dim: int = 1024,
     ) -> None:
-        if db_path is None:
-            from hermes_constants import get_hermes_home
-            db_path = str(get_hermes_home() / "memory_store.db")
-        self.db_path = Path(db_path).expanduser()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.default_trust = _clamp_trust(default_trust)
         self.hrr_dim = hrr_dim
         self._hrr_available = hrr._HAS_NUMPY
-        self._conn: sqlite3.Connection = sqlite3.connect(
-            str(self.db_path),
-            check_same_thread=False,
-            timeout=10.0,
-        )
         self._lock = threading.RLock()
-        self._conn.row_factory = sqlite3.Row
-        self._init_db()
+
+        # Resolve backend lazily so test harnesses that monkeypatch
+        # ``hermes_db.config`` see the effect; never raise on missing
+        # optional deps — fall through to sqlite.
+        try:
+            from hermes_db import get_backend
+            self._backend = get_backend()
+        except Exception:
+            self._backend = "sqlite"
+
+        if self._backend == "mysql":
+            self._init_mysql()
+        else:
+            self._init_sqlite(db_path)
 
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
 
-    def _init_db(self) -> None:
-        """Create tables, indexes, and triggers if they do not exist. Enable WAL mode."""
+    def _init_sqlite(self, db_path: "str | Path | None") -> None:
+        """Open the on-disk SQLite store and provision the local schema."""
+        if db_path is None:
+            from hermes_constants import get_hermes_home
+            db_path = str(get_hermes_home() / "memory_store.db")
+        self.db_path = Path(db_path).expanduser()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn: sqlite3.Connection = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+            timeout=10.0,
+        )
+        self._conn.row_factory = sqlite3.Row
         # Use the shared WAL-fallback helper so memory_store.db degrades
         # gracefully on NFS/SMB/FUSE-mounted HERMES_HOME (same issue as
         # state.db / kanban.db — see hermes_state._WAL_INCOMPAT_MARKERS).
@@ -138,6 +165,19 @@ class MemoryStore:
         if "hrr_vector" not in columns:
             self._conn.execute("ALTER TABLE facts ADD COLUMN hrr_vector BLOB")
         self._conn.commit()
+
+    def _init_mysql(self) -> None:
+        """Acquire shared MySQL connection.  DDL is provisioned by hermes_db.migrate."""
+        # ``db_path`` is a no-op identifier in MySQL mode — keep the
+        # attribute defined so any callers introspecting it don't blow up.
+        self.db_path = Path("")
+        from hermes_db import connect
+        self._conn = connect("memory_store")
+
+    @staticmethod
+    def _content_hash(content: str) -> str:
+        """sha256 hex digest carrying the LONGTEXT dedup invariant in MySQL."""
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     # ------------------------------------------------------------------
     # Public API
@@ -161,20 +201,46 @@ class MemoryStore:
                 raise ValueError("content must not be empty")
 
             try:
-                cur = self._conn.execute(
-                    """
-                    INSERT INTO facts (content, category, tags, trust_score)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (content, category, tags, self.default_trust),
-                )
-                self._conn.commit()
-                fact_id: int = cur.lastrowid  # type: ignore[assignment]
-            except sqlite3.IntegrityError:
-                # Duplicate content — return existing id
-                row = self._conn.execute(
-                    "SELECT fact_id FROM facts WHERE content = ?", (content,)
-                ).fetchone()
+                if self._backend == "mysql":
+                    # MySQL has no UNIQUE on LONGTEXT — we ride a sha256
+                    # ``content_hash`` column with a UNIQUE index instead.
+                    cur = self._conn.execute(
+                        """
+                        INSERT INTO facts (content, content_hash, category, tags, trust_score)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (content, self._content_hash(content), category, tags, self.default_trust),
+                    )
+                    self._conn.commit()
+                    fact_id = int(cur.lastrowid)  # type: ignore[arg-type]
+                else:
+                    cur = self._conn.execute(
+                        """
+                        INSERT INTO facts (content, category, tags, trust_score)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (content, category, tags, self.default_trust),
+                    )
+                    self._conn.commit()
+                    fact_id = cur.lastrowid  # type: ignore[assignment]
+            except Exception as exc:
+                # Duplicate content — sqlite raises sqlite3.IntegrityError;
+                # PyMySQL raises pymysql.err.IntegrityError.  Both inherit
+                # from a path that's awkward to import here, so we catch
+                # broadly and re-raise unless the row genuinely exists.
+                if self._backend == "mysql":
+                    row = self._conn.execute(
+                        "SELECT fact_id FROM facts WHERE content_hash = ?",
+                        (self._content_hash(content),),
+                    ).fetchone()
+                else:
+                    if not isinstance(exc, sqlite3.IntegrityError):
+                        raise
+                    row = self._conn.execute(
+                        "SELECT fact_id FROM facts WHERE content = ?", (content,)
+                    ).fetchone()
+                if row is None:
+                    raise
                 return int(row["fact_id"])
 
             # Entity extraction and linking
@@ -212,18 +278,44 @@ class MemoryStore:
                 params.append(category)
             params.append(limit)
 
-            sql = f"""
-                SELECT f.fact_id, f.content, f.category, f.tags,
-                       f.trust_score, f.retrieval_count, f.helpful_count,
-                       f.created_at, f.updated_at
-                FROM facts f
-                JOIN facts_fts fts ON fts.rowid = f.fact_id
-                WHERE facts_fts MATCH ?
-                  AND f.trust_score >= ?
-                  {category_clause}
-                ORDER BY fts.rank, f.trust_score DESC
-                LIMIT ?
-            """
+            if self._backend == "mysql":
+                # MySQL has no virtual ``facts_fts`` table; the FULLTEXT
+                # index lives directly on ``facts``.  ngram parser handles
+                # CJK; NATURAL LANGUAGE MODE matches the FTS5 default.
+                # ``rank`` semantics flip too: MySQL relevance score is
+                # higher = better, so we sort DESC.
+                sql = f"""
+                    SELECT f.fact_id, f.content, f.category, f.tags,
+                           f.trust_score, f.retrieval_count, f.helpful_count,
+                           f.created_at, f.updated_at
+                    FROM facts f
+                    WHERE MATCH(f.content, f.tags) AGAINST(? IN NATURAL LANGUAGE MODE)
+                      AND f.trust_score >= ?
+                      {category_clause}
+                    ORDER BY MATCH(f.content, f.tags) AGAINST(? IN NATURAL LANGUAGE MODE) DESC,
+                             f.trust_score DESC
+                    LIMIT ?
+                """
+                # Re-injecting the query for ORDER BY because the AGAINST
+                # expression has to repeat its argument; cheaper than a
+                # subquery for our 10-row LIMITs.
+                params = [query, min_trust]
+                if category is not None:
+                    params.append(category)
+                params.extend([query, limit])
+            else:
+                sql = f"""
+                    SELECT f.fact_id, f.content, f.category, f.tags,
+                           f.trust_score, f.retrieval_count, f.helpful_count,
+                           f.created_at, f.updated_at
+                    FROM facts f
+                    JOIN facts_fts fts ON fts.rowid = f.fact_id
+                    WHERE facts_fts MATCH ?
+                      AND f.trust_score >= ?
+                      {category_clause}
+                    ORDER BY fts.rank, f.trust_score DESC
+                    LIMIT ?
+                """
 
             rows = self._conn.execute(sql, params).fetchall()
             results = [self._row_to_dict(r) for r in rows]
@@ -264,6 +356,11 @@ class MemoryStore:
             if content is not None:
                 assignments.append("content = ?")
                 params.append(content.strip())
+                # Keep the MySQL dedup invariant in sync; harmless for
+                # SQLite (no such column) hence guarded by backend.
+                if self._backend == "mysql":
+                    assignments.append("content_hash = ?")
+                    params.append(self._content_hash(content.strip()))
             if tags is not None:
                 assignments.append("tags = ?")
                 params.append(tags)
@@ -442,14 +539,19 @@ class MemoryStore:
         if row is not None:
             return int(row["entity_id"])
 
-        # Search aliases — aliases stored as comma-separated; use LIKE with % boundaries
-        alias_row = self._conn.execute(
-            """
-            SELECT entity_id FROM entities
-            WHERE ',' || aliases || ',' LIKE '%,' || ? || ',%'
-            """,
-            (name,),
-        ).fetchone()
+        # Search aliases — aliases stored as comma-separated; use LIKE with % boundaries.
+        # SQLite uses ``||`` for string concat; MySQL uses CONCAT().
+        if self._backend == "mysql":
+            alias_sql = (
+                "SELECT entity_id FROM entities "
+                "WHERE CONCAT(',', aliases, ',') LIKE CONCAT('%,', ?, ',%')"
+            )
+        else:
+            alias_sql = (
+                "SELECT entity_id FROM entities "
+                "WHERE ',' || aliases || ',' LIKE '%,' || ? || ',%'"
+            )
+        alias_row = self._conn.execute(alias_sql, (name,)).fetchone()
         if alias_row is not None:
             return int(alias_row["entity_id"])
 
@@ -462,13 +564,15 @@ class MemoryStore:
 
     def _link_fact_entity(self, fact_id: int, entity_id: int) -> None:
         """Insert into fact_entities, silently ignore if the link already exists."""
-        self._conn.execute(
-            """
-            INSERT OR IGNORE INTO fact_entities (fact_id, entity_id)
-            VALUES (?, ?)
-            """,
-            (fact_id, entity_id),
-        )
+        if self._backend == "mysql":
+            sql = (
+                "INSERT IGNORE INTO fact_entities (fact_id, entity_id) VALUES (?, ?)"
+            )
+        else:
+            sql = (
+                "INSERT OR IGNORE INTO fact_entities (fact_id, entity_id) VALUES (?, ?)"
+            )
+        self._conn.execute(sql, (fact_id, entity_id))
         self._conn.commit()
 
     def _compute_hrr_vector(self, fact_id: int, content: str) -> None:
@@ -519,18 +623,33 @@ class MemoryStore:
             # Check SNR
             hrr.snr_estimate(self.hrr_dim, fact_count)
 
-            self._conn.execute(
-                """
-                INSERT INTO memory_banks (bank_name, vector, dim, fact_count, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(bank_name) DO UPDATE SET
-                    vector = excluded.vector,
-                    dim = excluded.dim,
-                    fact_count = excluded.fact_count,
-                    updated_at = excluded.updated_at
-                """,
-                (bank_name, hrr.phases_to_bytes(bank_vector), self.hrr_dim, fact_count),
-            )
+            if self._backend == "mysql":
+                self._conn.execute(
+                    """
+                    INSERT INTO memory_banks
+                        (bank_name, vector, dim, fact_count, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE
+                        vector     = VALUES(vector),
+                        dim        = VALUES(dim),
+                        fact_count = VALUES(fact_count),
+                        updated_at = VALUES(updated_at)
+                    """,
+                    (bank_name, hrr.phases_to_bytes(bank_vector), self.hrr_dim, fact_count),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    INSERT INTO memory_banks (bank_name, vector, dim, fact_count, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(bank_name) DO UPDATE SET
+                        vector = excluded.vector,
+                        dim = excluded.dim,
+                        fact_count = excluded.fact_count,
+                        updated_at = excluded.updated_at
+                    """,
+                    (bank_name, hrr.phases_to_bytes(bank_vector), self.hrr_dim, fact_count),
+                )
             self._conn.commit()
 
     def rebuild_all_vectors(self, dim: int | None = None) -> int:
@@ -563,12 +682,22 @@ class MemoryStore:
     # Utilities
     # ------------------------------------------------------------------
 
-    def _row_to_dict(self, row: sqlite3.Row) -> dict:
-        """Convert a sqlite3.Row to a plain dict."""
+    def _row_to_dict(self, row) -> dict:
+        """Convert a row (sqlite3.Row or hermes_db.Row) to a plain dict."""
+        # hermes_db.Row already supports dict()-style conversion via
+        # mapping protocol; sqlite3.Row does too.  Both code paths
+        # collapse into the same call.
         return dict(row)
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection.
+
+        In MySQL mode the underlying connection is owned by
+        ``hermes_db``; we leave it alone so a process-wide
+        ``hermes_db.close_all()`` can manage shutdown.
+        """
+        if self._backend == "mysql":
+            return
         self._conn.close()
 
     def __enter__(self) -> "MemoryStore":

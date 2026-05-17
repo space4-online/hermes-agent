@@ -1,0 +1,131 @@
+# Hermes Agent Docker 化部署（生产）：
+#   GH Actions 打包仓库 → scp 到服务器 → 服务器本地 docker compose build → 重启 gateway
+#
+# 仅 paladnix 触发的推送才会执行部署步骤（与 space4-backend 同风格）。
+#
+# 前置条件（一次性，在宿主机上执行 scripts/setup-host-ubuntu22.sh 完成）：
+#   1. 宿主机已安装 docker + docker compose v2，当前用户在 docker 组
+#   2. ~/.hermes/.env 已配置 API_SERVER_KEY / API_SERVER_HOST / API_SERVER_PORT
+#      及各模型 provider 的 API Key（OPENAI_API_KEY 等）
+#   3. ~/env/hermes.env 中可放 ACR_* 等私有镜像仓库凭证（如有）
+#   4. 防火墙仅放行 codeshark 后端公网 IP 到 8642
+#
+# GH 仓库 settings → environments → 新建 environment "hermes-product"，并配置：
+#   vars:
+#     HERMES_HOST   — 目标主机公网 IP / 域名
+#     HERMES_USER   — 部署用户名（在 docker 组）
+#   secrets:
+#     HERMES_DEPLOY_KEY — 上述用户的 SSH 私钥
+
+name: Build and Deploy Hermes (Server)
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: hermes-product
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Create deployment package
+        run: |
+          # 打包仓库，排除大体积/构建产物/敏感目录
+          tar --exclude='./.git' \
+              --exclude='./.github' \
+              --exclude='./node_modules' \
+              --exclude='**/node_modules' \
+              --exclude='./.venv' \
+              --exclude='**/__pycache__' \
+              --exclude='**/*.pyc' \
+              --exclude='./web/dist' \
+              --exclude='./ui-tui/dist' \
+              --exclude='./hermes_cli/web_dist' \
+              --exclude='./.webpack-cache' \
+              --exclude='./tinker-atropos' \
+              -czf /tmp/hermes-deploy.tar.gz -C . .
+          ls -lh /tmp/hermes-deploy.tar.gz
+
+      - name: Copy package to server
+        if: ${{ github.triggering_actor == 'paladnix' }}
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ vars.HERMES_HOST }}
+          username: ${{ vars.HERMES_USER }}
+          key: ${{ secrets.HERMES_DEPLOY_KEY }}
+          port: 22
+          source: "/tmp/hermes-deploy.tar.gz"
+          target: "/tmp/"
+
+      - name: Deploy on server
+        if: ${{ github.triggering_actor == 'paladnix' }}
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ vars.HERMES_HOST }}
+          username: ${{ vars.HERMES_USER }}
+          key: ${{ secrets.HERMES_DEPLOY_KEY }}
+          port: 22
+          command_timeout: 30m
+          script: |
+            set -e
+            PROJECT_DIR="/home/${{ vars.HERMES_USER }}/hermes-agent"
+            DATA_DIR="/home/${{ vars.HERMES_USER }}/.hermes"
+            ENV_FILE="/home/${{ vars.HERMES_USER }}/env/hermes.env"
+
+            echo "==> Refreshing source at $PROJECT_DIR"
+            # 注意：不能直接 rm -rf 整个项目目录，否则会丢掉 docker build 缓存的关联
+            # 我们删除源码但保留 .docker-cache 等可能的辅助目录（如果有）
+            mkdir -p $PROJECT_DIR
+            # 解压前清理旧源码（保留隐藏的状态文件，如有）
+            find $PROJECT_DIR -mindepth 1 -maxdepth 1 \
+                ! -name '.docker-cache' \
+                -exec rm -rf {} +
+            tar -xzf /tmp/hermes-deploy.tar.gz -C $PROJECT_DIR
+            rm -f /tmp/hermes-deploy.tar.gz
+
+            echo "==> Ensuring data dir $DATA_DIR exists"
+            mkdir -p "$DATA_DIR"
+
+            echo "==> Loading registry credentials (if any)"
+            if [ -f "$ENV_FILE" ]; then
+              set -a; source "$ENV_FILE"; set +a
+              if [ -n "${ACR_REGISTRY:-}" ] && [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ]; then
+                docker login "$ACR_REGISTRY" -u "$ACR_USERNAME" -p "$ACR_PASSWORD"
+              fi
+            fi
+
+            export HERMES_UID=$(id -u)
+            export HERMES_GID=$(id -g)
+
+            echo "==> docker compose build gateway"
+            cd $PROJECT_DIR
+            docker compose -f docker-compose.yml build gateway
+
+            echo "==> docker compose up -d mysql（首次启动会初始化 /data/hermes-mysql）"
+            docker compose -f docker-compose.yml up -d mysql
+
+            echo "==> docker compose up -d --force-recreate gateway"
+            # gateway depends_on mysql (service_healthy)，会等 MySQL 健康后再启动
+            docker compose -f docker-compose.yml up -d --force-recreate gateway
+
+            echo "==> Container status:"
+            docker ps --filter "name=hermes"
+
+            echo "==> Verifying API server is healthy"
+            # 等待最多 30s 让 API server 起来
+            for i in $(seq 1 15); do
+              if curl -fsS -o /dev/null http://127.0.0.1:8642/v1/models -H "Authorization: Bearer ${API_SERVER_KEY:-dummy}" 2>/dev/null \
+                 || curl -fsS -o /dev/null http://127.0.0.1:8642/health 2>/dev/null; then
+                echo "API server is up."
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "WARN: API server health check timed out, please check 'docker logs hermes'"

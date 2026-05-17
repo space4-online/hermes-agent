@@ -65,6 +65,71 @@ _EXCLUDED_NAMES = {
 _SECRET_FILE_NAMES = {".env", "auth.json", "state.db"}
 
 
+# ---------------------------------------------------------------------------
+# Backend detection
+# ---------------------------------------------------------------------------
+#
+# When the active storage backend is MySQL, the structured tables (state /
+# kanban / memory_store / response_store) live inside the database server,
+# *not* inside HERMES_HOME. The zip archive built here only covers files on
+# disk (config / credentials / sessions / artifacts / profiles), so users must
+# back up MySQL separately via ``mysqldump`` or managed-infra snapshots.
+# We surface a clear notice so nobody mistakes a config-only zip for a full
+# backup.
+
+def _detect_active_backend() -> str:
+    """Return the active storage backend name (``"sqlite"`` or ``"mysql"``).
+
+    This intentionally avoids importing ``hermes_db`` — that package's
+    factory eager-initializes a few directory hooks under HERMES_HOME
+    (``cron/``, ``logs/``, ``memories/``, ...), which would dirty the
+    target right before we walk it. We only need a cheap textual signal:
+
+    1. ``HERMES_DB_BACKEND`` env var (highest priority — matches
+       ``hermes_db.config.get_storage_config``).
+    2. ``storage.backend`` in ``cli-config.yaml`` under HERMES_HOME.
+    3. Default ``sqlite``.
+    """
+    env = os.environ.get("HERMES_DB_BACKEND")
+    if env:
+        env = env.strip().lower()
+        if env in ("sqlite", "mysql"):
+            return env
+
+    try:
+        cfg_path = get_default_hermes_root() / "cli-config.yaml"
+        if cfg_path.is_file():
+            import yaml  # local import; pyyaml is already a runtime dep
+            with cfg_path.open("r", encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+            section = data.get("storage")
+            if isinstance(section, dict):
+                backend = str(section.get("backend", "")).strip().lower()
+                if backend in ("sqlite", "mysql"):
+                    return backend
+    except Exception:
+        # Anything goes wrong — a missing yaml dep, malformed file,
+        # IO error — stay on the safe (sqlite) default.
+        pass
+
+    return "sqlite"
+
+
+def _print_mysql_backup_notice(action: str) -> None:
+    """Print a prominent notice that MySQL data is *not* covered by this zip."""
+    print()
+    print("=" * 72)
+    print(f"NOTICE: Hermes is running with the MySQL storage backend.")
+    print(f"  This {action} only covers files under HERMES_HOME (configs,")
+    print("  credentials, sessions, profiles, artifacts). Structured data")
+    print("  (state / kanban / memory_store / response_store) lives in MySQL")
+    print("  and must be handled with managed tooling, e.g.:")
+    print("    mysqldump --single-transaction <db> > hermes-mysql.sql")
+    print("  See docs/storage-mysql.md for the recommended workflow.")
+    print("=" * 72)
+    print()
+
+
 def _should_exclude(rel_path: Path) -> bool:
     """Return True if *rel_path* (relative to hermes root) should be skipped."""
     parts = rel_path.parts
@@ -132,6 +197,9 @@ def run_backup(args) -> None:
     if not hermes_root.is_dir():
         print(f"Error: Hermes home directory not found at {hermes_root}")
         sys.exit(1)
+
+    if _detect_active_backend() == "mysql":
+        _print_mysql_backup_notice("backup")
 
     # Determine output path
     if args.output:
@@ -315,6 +383,9 @@ def run_import(args) -> None:
     if not zipfile.is_zipfile(zip_path):
         print(f"Error: Not a valid zip file: {zip_path}")
         sys.exit(1)
+
+    if _detect_active_backend() == "mysql":
+        _print_mysql_backup_notice("import")
 
     hermes_root = get_default_hermes_root()
 
@@ -690,6 +761,15 @@ def prune_quick_snapshots(
 
 def run_quick_backup(args) -> None:
     """CLI entry point for hermes backup --quick."""
+    if _detect_active_backend() == "mysql":
+        # Quick snapshots target SQLite-resident state files. With MySQL the
+        # canonical state lives in the database — nothing on disk to snapshot.
+        print(
+            "Quick snapshots are not supported with the MySQL backend; the\n"
+            "  authoritative state lives in MySQL. Use database-side tooling\n"
+            "  (mysqldump / point-in-time-recovery) instead. Skipping."
+        )
+        return
     label = getattr(args, "label", None)
     snap_id = create_quick_snapshot(label=label)
     if snap_id:

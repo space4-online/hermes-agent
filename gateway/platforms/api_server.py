@@ -290,18 +290,44 @@ def check_api_server_requirements() -> bool:
 
 class ResponseStore:
     """
-    SQLite-backed LRU store for Responses API state.
+    Persistent LRU store for Responses API state.
 
     Each stored response includes the full internal conversation history
     (with tool calls and results) so it can be reconstructed on subsequent
     requests via previous_response_id.
 
-    Persists across gateway restarts.  Falls back to in-memory SQLite
-    if the on-disk path is unavailable.
+    Backend selection follows ``hermes_db.get_backend()``:
+    * ``sqlite`` (default): on-disk ``response_store.db`` under HERMES_HOME,
+      with the same WAL/NFS fallback used by state.db / kanban.db.
+      Falls back to in-memory SQLite if the on-disk path is unavailable.
+    * ``mysql``: routed to the central MySQL service via
+      ``hermes_db.connect('response_store')``.  Schema is provisioned by
+      ``python -m hermes_db.migrate --store response_store``; we do NOT
+      run DDL here when the backend is mysql.
     """
 
     def __init__(self, max_size: int = MAX_STORED_RESPONSES, db_path: str = None):
         self._max_size = max_size
+
+        # Resolve backend lazily so test harnesses that monkeypatch
+        # ``hermes_db.config`` see the effect; never raise on missing
+        # optional deps — fall through to sqlite.
+        try:
+            from hermes_db import get_backend
+            self._backend = get_backend()
+        except Exception:
+            self._backend = "sqlite"
+
+        if self._backend == "mysql":
+            self._init_mysql()
+        else:
+            self._init_sqlite(db_path)
+
+    # ------------------------------------------------------------------
+    # Backend init
+    # ------------------------------------------------------------------
+
+    def _init_sqlite(self, db_path):
         if db_path is None:
             try:
                 from hermes_cli.config import get_hermes_home
@@ -333,6 +359,16 @@ class ResponseStore:
         )
         self._conn.commit()
 
+    def _init_mysql(self):
+        # DDL is provisioned ahead of time by hermes_db.migrate; we just
+        # acquire a shared connection scoped to the response_store store.
+        from hermes_db import connect
+        self._conn = connect("response_store")
+
+    # ------------------------------------------------------------------
+    # CRUD
+    # ------------------------------------------------------------------
+
     def get(self, response_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a stored response by ID (updates access time for LRU)."""
         row = self._conn.execute(
@@ -349,18 +385,47 @@ class ResponseStore:
 
     def put(self, response_id: str, data: Dict[str, Any]) -> None:
         """Store a response, evicting the oldest if at capacity."""
-        self._conn.execute(
-            "INSERT OR REPLACE INTO responses (response_id, data, accessed_at) VALUES (?, ?, ?)",
-            (response_id, json.dumps(data, default=str), time.time()),
-        )
+        payload = json.dumps(data, default=str)
+        now = time.time()
+        if self._backend == "mysql":
+            # MySQL has no INSERT OR REPLACE; ON DUPLICATE KEY UPDATE
+            # is the idiomatic equivalent and preserves the same
+            # "insert or upsert" semantics.
+            self._conn.execute(
+                "INSERT INTO responses (response_id, data, accessed_at) "
+                "VALUES (?, ?, ?) "
+                "ON DUPLICATE KEY UPDATE data = VALUES(data), "
+                "accessed_at = VALUES(accessed_at)",
+                (response_id, payload, now),
+            )
+        else:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO responses (response_id, data, accessed_at) VALUES (?, ?, ?)",
+                (response_id, payload, now),
+            )
         # Evict oldest entries beyond max_size
         count = self._conn.execute("SELECT COUNT(*) FROM responses").fetchone()[0]
         if count > self._max_size:
-            self._conn.execute(
-                "DELETE FROM responses WHERE response_id IN "
-                "(SELECT response_id FROM responses ORDER BY accessed_at ASC LIMIT ?)",
-                (count - self._max_size,),
-            )
+            limit = count - self._max_size
+            if self._backend == "mysql":
+                # MySQL refuses to LIMIT inside the IN-subquery used in
+                # the sqlite branch; wrap one extra SELECT so the
+                # optimiser sees a derived table instead.
+                self._conn.execute(
+                    "DELETE FROM responses WHERE response_id IN ("
+                    "  SELECT response_id FROM ("
+                    "    SELECT response_id FROM responses "
+                    "    ORDER BY accessed_at ASC LIMIT ?"
+                    "  ) AS oldest"
+                    ")",
+                    (limit,),
+                )
+            else:
+                self._conn.execute(
+                    "DELETE FROM responses WHERE response_id IN "
+                    "(SELECT response_id FROM responses ORDER BY accessed_at ASC LIMIT ?)",
+                    (limit,),
+                )
         self._conn.commit()
 
     def delete(self, response_id: str) -> bool:
@@ -380,14 +445,24 @@ class ResponseStore:
 
     def set_conversation(self, name: str, response_id: str) -> None:
         """Map a conversation name to its latest response_id."""
-        self._conn.execute(
-            "INSERT OR REPLACE INTO conversations (name, response_id) VALUES (?, ?)",
-            (name, response_id),
-        )
+        if self._backend == "mysql":
+            self._conn.execute(
+                "INSERT INTO conversations (name, response_id) VALUES (?, ?) "
+                "ON DUPLICATE KEY UPDATE response_id = VALUES(response_id)",
+                (name, response_id),
+            )
+        else:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO conversations (name, response_id) VALUES (?, ?)",
+                (name, response_id),
+            )
         self._conn.commit()
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection (sqlite path only — mysql
+        connections are managed by ``hermes_db.close_all()``)."""
+        if self._backend == "mysql":
+            return
         try:
             self._conn.close()
         except Exception:

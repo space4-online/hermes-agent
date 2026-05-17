@@ -911,7 +911,31 @@ def connect(
     * Neither → :func:`kanban_db_path` resolves via
       ``HERMES_KANBAN_DB`` env → ``HERMES_KANBAN_BOARD`` env →
       ``<root>/kanban/current`` → ``default``.
+
+    Backend selection:
+    The MySQL backend is gated behind ``hermes_db.get_backend() ==
+    "mysql"``.  The schema and migration story are already in place
+    (``sql/mysql/kanban/V1__init.sql`` adds a ``board_slug`` column
+    so all boards share one MySQL database), but the in-place SQL
+    rewrite that injects ``board_slug`` into every query in this
+    module is large enough to ship as its own follow-up.  Until that
+    lands, asking for the kanban store on MySQL trips a clear error
+    instead of silently corrupting cross-board data.
     """
+    # Backend gate — SQLite path stays untouched (zero-regression).
+    try:
+        from hermes_db import get_backend as _get_backend
+        _active_backend = _get_backend()
+    except Exception:
+        _active_backend = "sqlite"
+    if _active_backend == "mysql":
+        raise RuntimeError(
+            "hermes_cli.kanban_db: MySQL backend is not yet wired through "
+            "this module.  The DDL exists (sql/mysql/kanban/V1__init.sql "
+            "with a board_slug column for single-DB multi-tenant) but the "
+            "in-place SQL rewrite is pending.  Either set storage.backend "
+            "= sqlite or wait for the kanban-mysql follow-up."
+        )
     if db_path is not None:
         path = db_path
     else:

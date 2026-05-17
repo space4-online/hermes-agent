@@ -816,42 +816,53 @@ class TestNewEndpoints:
             assert "name" in skills[0]
             assert "enabled" in skills[0]
 
-    def test_skills_list_includes_disabled_skills(self, monkeypatch):
-        import tools.skills_tool as skills_tool
+    def test_skills_list_includes_disabled_skills(self, monkeypatch, tmp_path):
         import hermes_cli.skills_config as skills_config
         import hermes_cli.web_server as web_server
 
-        def _fake_find_all_skills(*, skip_disabled=False):
-            if skip_disabled:
-                return [
-                    {"name": "active-skill", "description": "active", "category": "demo"},
-                    {"name": "disabled-skill", "description": "disabled", "category": "demo"},
-                ]
+        user_dir = tmp_path / "user_skills"
+        ext_dir = tmp_path / "ext_skills"
+        user_dir.mkdir()
+        ext_dir.mkdir()
+
+        def _fake_scan():
             return [
-                {"name": "active-skill", "description": "active", "category": "demo"},
+                {
+                    "name": "active-skill",
+                    "description": "active",
+                    "category": "demo",
+                    "path": str(user_dir / "active-skill" / "SKILL.md"),
+                    "source_dir": str(user_dir),
+                },
+                {
+                    "name": "disabled-skill",
+                    "description": "disabled",
+                    "category": "demo",
+                    "path": str(ext_dir / "disabled-skill" / "SKILL.md"),
+                    "source_dir": str(ext_dir),
+                },
             ]
 
-        monkeypatch.setattr(skills_tool, "_find_all_skills", _fake_find_all_skills)
+        monkeypatch.setattr(web_server, "_scan_skills_with_paths", _fake_scan)
+        monkeypatch.setattr(web_server, "_user_skills_dir", lambda: user_dir)
         monkeypatch.setattr(skills_config, "get_disabled_skills", lambda config: {"disabled-skill"})
-        monkeypatch.setattr(web_server, "load_config", lambda: {"skills": {"disabled": ["disabled-skill"]}})
+        monkeypatch.setattr(
+            web_server, "load_config", lambda: {"skills": {"disabled": ["disabled-skill"]}}
+        )
 
         resp = self.client.get("/api/skills")
 
         assert resp.status_code == 200
-        assert resp.json() == [
-            {
-                "name": "active-skill",
-                "description": "active",
-                "category": "demo",
-                "enabled": True,
-            },
-            {
-                "name": "disabled-skill",
-                "description": "disabled",
-                "category": "demo",
-                "enabled": False,
-            },
-        ]
+        skills = resp.json()
+        assert len(skills) == 2
+        by_name = {s["name"]: s for s in skills}
+        assert by_name["active-skill"]["enabled"] is True
+        assert by_name["active-skill"]["writable"] is True
+        assert by_name["active-skill"]["description"] == "active"
+        assert by_name["active-skill"]["category"] == "demo"
+        assert by_name["disabled-skill"]["enabled"] is False
+        assert by_name["disabled-skill"]["writable"] is False
+        assert by_name["disabled-skill"]["description"] == "disabled"
 
     def test_toolsets_list(self):
         resp = self.client.get("/api/tools/toolsets")
@@ -1038,6 +1049,305 @@ class TestNewEndpoints:
             assert "token" not in data
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Skill admin endpoints (detail / create / update / delete)
+    # ------------------------------------------------------------------
+
+    def _patch_skills_dir(self, monkeypatch, tmp_path):
+        """Point web_server skill scanning + write gate to a tmp dir."""
+        import hermes_cli.web_server as web_server
+
+        skills_dir = tmp_path / "skills_root"
+        skills_dir.mkdir()
+
+        def _scan():
+            out = []
+            for skill_md in skills_dir.rglob("SKILL.md"):
+                try:
+                    raw = skill_md.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                # naive frontmatter extraction (test-only)
+                name = skill_md.parent.name
+                description = ""
+                if raw.startswith("---"):
+                    parts = raw.split("---", 2)
+                    if len(parts) >= 3:
+                        for line in parts[1].splitlines():
+                            if line.startswith("name:"):
+                                name = line.split(":", 1)[1].strip()
+                            elif line.startswith("description:"):
+                                description = line.split(":", 1)[1].strip()
+                category = None
+                rel = skill_md.parent.relative_to(skills_dir)
+                if len(rel.parts) > 1:
+                    category = "/".join(rel.parts[:-1])
+                out.append({
+                    "name": name,
+                    "description": description,
+                    "category": category,
+                    "path": str(skill_md),
+                    "source_dir": str(skills_dir),
+                })
+            return out
+
+        monkeypatch.setattr(web_server, "_scan_skills_with_paths", _scan)
+        monkeypatch.setattr(web_server, "_user_skills_dir", lambda: skills_dir)
+        monkeypatch.setattr(web_server, "load_config", lambda: {})
+        return skills_dir
+
+    def test_skill_detail_returns_writable_for_user_skill(self, monkeypatch, tmp_path):
+        skills_dir = self._patch_skills_dir(monkeypatch, tmp_path)
+        target = skills_dir / "my-skill"
+        target.mkdir()
+        (target / "SKILL.md").write_text(
+            "---\nname: my-skill\ndescription: hello world\n---\n\n# Body\n",
+            encoding="utf-8",
+        )
+
+        resp = self.client.get("/api/skills/my-skill")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["name"] == "my-skill"
+        assert body["writable"] is True
+        assert "hello world" in body["content"]
+        assert body["frontmatter"].get("name") == "my-skill"
+
+    def test_skill_detail_returns_readonly_for_external_skill(self, monkeypatch, tmp_path):
+        import hermes_cli.web_server as web_server
+
+        user_dir = tmp_path / "user"
+        ext_dir = tmp_path / "ext"
+        user_dir.mkdir()
+        ext_dir.mkdir()
+        ext_skill = ext_dir / "ro-skill"
+        ext_skill.mkdir()
+        (ext_skill / "SKILL.md").write_text(
+            "---\nname: ro-skill\ndescription: readonly\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        def _scan():
+            return [{
+                "name": "ro-skill",
+                "description": "readonly",
+                "category": None,
+                "path": str(ext_skill / "SKILL.md"),
+                "source_dir": str(ext_dir),
+            }]
+
+        monkeypatch.setattr(web_server, "_scan_skills_with_paths", _scan)
+        monkeypatch.setattr(web_server, "_user_skills_dir", lambda: user_dir)
+
+        resp = self.client.get("/api/skills/ro-skill")
+        assert resp.status_code == 200
+        assert resp.json()["writable"] is False
+
+    def test_skill_detail_404(self, monkeypatch, tmp_path):
+        self._patch_skills_dir(monkeypatch, tmp_path)
+        resp = self.client.get("/api/skills/nonexistent-skill-xyz")
+        assert resp.status_code == 404
+
+    def test_skill_create_writes_file(self, monkeypatch, tmp_path):
+        skills_dir = self._patch_skills_dir(monkeypatch, tmp_path)
+        resp = self.client.post(
+            "/api/skills",
+            json={
+                "name": "new-skill",
+                "category": "productivity",
+                "content": "---\nname: new-skill\ndescription: brand new\n---\n\nbody\n",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        target = skills_dir / "productivity" / "new-skill" / "SKILL.md"
+        assert target.exists()
+        text = target.read_text(encoding="utf-8")
+        assert "brand new" in text
+
+    def test_skill_create_rejects_invalid_name(self, monkeypatch, tmp_path):
+        self._patch_skills_dir(monkeypatch, tmp_path)
+        resp = self.client.post(
+            "/api/skills",
+            json={"name": "../bad", "content": "x"},
+        )
+        assert resp.status_code == 400
+
+    def test_skill_update_writes_file(self, monkeypatch, tmp_path):
+        skills_dir = self._patch_skills_dir(monkeypatch, tmp_path)
+        target = skills_dir / "edit-me"
+        target.mkdir()
+        skill_md = target / "SKILL.md"
+        skill_md.write_text(
+            "---\nname: edit-me\ndescription: original\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        new_body = "---\nname: edit-me\ndescription: updated\n---\n\nrewritten\n"
+        resp = self.client.put(
+            "/api/skills/edit-me",
+            json={"content": new_body},
+        )
+        assert resp.status_code == 200, resp.text
+        assert skill_md.read_text(encoding="utf-8") == new_body
+
+    def test_skill_update_rejects_readonly(self, monkeypatch, tmp_path):
+        import hermes_cli.web_server as web_server
+
+        user_dir = tmp_path / "user"
+        ext_dir = tmp_path / "ext"
+        user_dir.mkdir()
+        ext_dir.mkdir()
+        ext_skill = ext_dir / "ro-skill"
+        ext_skill.mkdir()
+        ro_md = ext_skill / "SKILL.md"
+        ro_md.write_text(
+            "---\nname: ro-skill\ndescription: readonly\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        def _scan():
+            return [{
+                "name": "ro-skill",
+                "description": "readonly",
+                "category": None,
+                "path": str(ro_md),
+                "source_dir": str(ext_dir),
+            }]
+
+        monkeypatch.setattr(web_server, "_scan_skills_with_paths", _scan)
+        monkeypatch.setattr(web_server, "_user_skills_dir", lambda: user_dir)
+        monkeypatch.setattr(web_server, "load_config", lambda: {})
+
+        resp = self.client.put(
+            "/api/skills/ro-skill",
+            json={"content": "hacked"},
+        )
+        assert resp.status_code in (400, 403)
+        # Original file untouched.
+        assert "readonly" in ro_md.read_text(encoding="utf-8")
+
+    def test_skill_delete_removes_directory(self, monkeypatch, tmp_path):
+        skills_dir = self._patch_skills_dir(monkeypatch, tmp_path)
+        target = skills_dir / "goner"
+        target.mkdir()
+        (target / "SKILL.md").write_text(
+            "---\nname: goner\ndescription: rm me\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        resp = self.client.delete("/api/skills/goner")
+        assert resp.status_code == 200, resp.text
+        assert not target.exists()
+
+    # ------------------------------------------------------------------
+    # Memory API endpoints
+    # ------------------------------------------------------------------
+
+    def _reset_memory_store(self, monkeypatch):
+        """Force a fresh MemoryStore singleton (per-test isolation)."""
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(web_server, "_MEMORY_STORE", None)
+
+    def test_memory_stats_returns_shape(self, monkeypatch):
+        self._reset_memory_store(monkeypatch)
+        resp = self.client.get("/api/memory/stats")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        for key in ("facts", "entities", "banks", "categories", "backend"):
+            assert key in body
+        assert isinstance(body["categories"], list)
+        assert isinstance(body["facts"], int)
+
+    def test_memory_fact_crud_round_trip(self, monkeypatch):
+        self._reset_memory_store(monkeypatch)
+
+        # Create
+        create = self.client.post(
+            "/api/memory/facts",
+            json={
+                "content": "Alice loves Bob",
+                "category": "relationship",
+                "tags": "romance",
+            },
+        )
+        assert create.status_code == 200, create.text
+        fact_id = create.json()["fact_id"]
+        assert isinstance(fact_id, int) and fact_id > 0
+
+        # List
+        listing = self.client.get("/api/memory/facts")
+        assert listing.status_code == 200
+        ids = [f["fact_id"] for f in listing.json()["facts"]]
+        assert fact_id in ids
+
+        # Detail
+        detail = self.client.get(f"/api/memory/facts/{fact_id}")
+        assert detail.status_code == 200
+        d = detail.json()
+        assert d["content"] == "Alice loves Bob"
+        assert d["category"] == "relationship"
+        assert isinstance(d["entities"], list)
+
+        # Patch — content + trust_delta
+        patch = self.client.patch(
+            f"/api/memory/facts/{fact_id}",
+            json={"content": "Alice tolerates Bob", "trust_delta": 0.1},
+        )
+        assert patch.status_code == 200, patch.text
+        after = self.client.get(f"/api/memory/facts/{fact_id}").json()
+        assert after["content"] == "Alice tolerates Bob"
+
+        # Delete
+        delete = self.client.delete(f"/api/memory/facts/{fact_id}")
+        assert delete.status_code == 200
+        assert self.client.get(f"/api/memory/facts/{fact_id}").status_code == 404
+
+    def test_memory_facts_filter_by_category(self, monkeypatch):
+        self._reset_memory_store(monkeypatch)
+        for content, category in [
+            ("fact one", "alpha"),
+            ("fact two", "beta"),
+            ("fact three", "alpha"),
+        ]:
+            r = self.client.post(
+                "/api/memory/facts",
+                json={"content": content, "category": category},
+            )
+            assert r.status_code == 200
+
+        resp = self.client.get("/api/memory/facts?category=alpha")
+        assert resp.status_code == 200
+        cats = {f["category"] for f in resp.json()["facts"]}
+        assert cats == {"alpha"}
+        assert resp.json()["count"] == 2
+
+    def test_memory_fact_create_rejects_empty(self, monkeypatch):
+        self._reset_memory_store(monkeypatch)
+        resp = self.client.post(
+            "/api/memory/facts",
+            json={"content": "   "},
+        )
+        assert resp.status_code == 400
+
+    def test_memory_entities_and_banks_endpoints(self, monkeypatch):
+        self._reset_memory_store(monkeypatch)
+        # Seed at least one fact so that derivation paths run.
+        self.client.post(
+            "/api/memory/facts",
+            json={"content": "Paris is the capital of France", "category": "geo"},
+        )
+
+        ents = self.client.get("/api/memory/entities")
+        assert ents.status_code == 200
+        body = ents.json()
+        assert "entities" in body and isinstance(body["entities"], list)
+
+        banks = self.client.get("/api/memory/banks")
+        assert banks.status_code == 200
+        body = banks.json()
+        assert "banks" in body and isinstance(body["banks"], list)
 
 
 # ---------------------------------------------------------------------------

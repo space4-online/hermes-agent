@@ -10275,6 +10275,21 @@ Examples:
     config_parser.set_defaults(func=cmd_config)
 
     # =========================================================================
+    # db command — storage backend admin (schema migrate / sqlite→mysql import)
+    # =========================================================================
+    db_parser = subparsers.add_parser(
+        "db",
+        help="Storage backend admin (schema migrations, sqlite→mysql import)",
+        description=(
+            "Manage Hermes Agent's storage layer: apply Flyway-style DDL "
+            "migrations, inspect status, or import a legacy SQLite store "
+            "into the configured MySQL backend."
+        ),
+    )
+    from hermes_cli.db_admin import register_cli as _register_db_cli
+    _register_db_cli(db_parser)
+
+    # =========================================================================
     # pairing command
     # =========================================================================
     pairing_parser = subparsers.add_parser(

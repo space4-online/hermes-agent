@@ -1,6 +1,11 @@
-FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b AS uv_source
-FROM tianon/gosu:1.19-trixie@sha256:3b176695959c71e123eb390d427efc665eeb561b1540e82679c15e992006b8b9 AS gosu_source
-FROM debian:13.4
+# ---------- 基础镜像（可由 build args 覆盖为 ACR 同步后的镜像路径）----------
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b
+ARG GOSU_IMAGE=tianon/gosu:1.19-trixie@sha256:3b176695959c71e123eb390d427efc665eeb561b1540e82679c15e992006b8b9
+ARG DEBIAN_IMAGE=debian:13.4
+
+FROM ${UV_IMAGE} AS uv_source
+FROM ${GOSU_IMAGE} AS gosu_source
+FROM ${DEBIAN_IMAGE}
 
 # Disable Python stdout buffering to ensure logs are printed immediately
 ENV PYTHONUNBUFFERED=1
@@ -8,6 +13,23 @@ ENV PYTHONUNBUFFERED=1
 # Store Playwright browsers outside the volume mount so the build-time
 # install survives the /opt/data volume overlay at runtime.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
+
+# ---------- 构建期国内镜像加速（可选，由 docker-compose build args 注入）----------
+# APT_MIRROR 为空时保持官方源；npm/uv index URL 同理
+ARG APT_MIRROR=
+ARG NPM_REGISTRY=
+ARG PIP_INDEX_URL=
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
+ENV UV_INDEX_URL=${PIP_INDEX_URL}
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+RUN if [ -n "$APT_MIRROR" ]; then \
+      if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+      fi; \
+      if [ -f /etc/apt/sources.list ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list; \
+      fi; \
+    fi
 
 # Install system dependencies in one layer, clear APT cache
 # tini reaps orphaned zombie processes (MCP stdio subprocesses, git, bun, etc.)

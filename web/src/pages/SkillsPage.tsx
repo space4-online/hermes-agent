@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useMemo } from "react";
+import { useEffect, useLayoutEffect, useState, useMemo, useCallback } from "react";
 import {
   Package,
   Search,
@@ -14,12 +14,19 @@ import {
   Code,
   Zap,
   Filter,
+  Plus,
+  Save,
+  Trash2,
+  ArrowLeft,
+  Copy,
+  Lock,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { SkillInfo, ToolsetInfo } from "@/lib/api";
+import type { SkillInfo, SkillDetail, ToolsetInfo } from "@/lib/api";
 import { useToast } from "@/hooks/useToast";
 import { Toast } from "@/components/Toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { ListItem } from "@nous-research/ui/ui/components/list-item";
@@ -101,9 +108,29 @@ export default function SkillsPage() {
   const [view, setView] = useState<"skills" | "toolsets">("skills");
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [togglingSkills, setTogglingSkills] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<SkillInfo | null>(null);
+  const [detail, setDetail] = useState<SkillDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createCategory, setCreateCategory] = useState("");
+  const [createContent, setCreateContent] = useState(
+    "---\nname: my-skill\ndescription: One-line description\n---\n\n# My skill\n\nWrite the skill instructions here.\n",
+  );
+  const [creating, setCreating] = useState(false);
   const { toast, showToast } = useToast();
   const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
+
+  const reloadSkills = useCallback(async () => {
+    const s = await api.getSkills();
+    setSkills(s);
+    return s;
+  }, []);
 
   useEffect(() => {
     Promise.all([api.getSkills(), api.getToolsets()])
@@ -139,6 +166,136 @@ export default function SkillsPage() {
       });
     }
   };
+
+  /* ---- Detail / Edit / Delete / Create ---- */
+  const openDetail = useCallback(
+    async (skill: SkillInfo) => {
+      setSelected(skill);
+      setDetail(null);
+      setDetailLoading(true);
+      try {
+        const d = await api.getSkill(skill.name);
+        setDetail(d);
+        setEditContent(d.content);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        showToast(`${t.skills.loadDetailFailed ?? "Load failed"}: ${msg}`, "error");
+        setSelected(null);
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [showToast, t],
+  );
+
+  const closeDetail = useCallback(() => {
+    setSelected(null);
+    setDetail(null);
+    setEditContent("");
+    setSaving(false);
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!detail) return;
+    if (!editContent.trim()) {
+      showToast(t.skills.contentRequired ?? "Content required", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.updateSkill(detail.name, editContent);
+      showToast(t.skills.saved ?? "Saved", "success");
+      const fresh = await api.getSkill(detail.name);
+      setDetail(fresh);
+      setEditContent(fresh.content);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`${t.skills.saveFailed ?? "Save failed"}: ${msg}`, "error");
+    } finally {
+      setSaving(false);
+    }
+  }, [detail, editContent, showToast, t]);
+
+  const handleDelete = useCallback(async () => {
+    if (!detail) return;
+    setDeleting(true);
+    try {
+      await api.deleteSkill(detail.name);
+      showToast(t.skills.deleted ?? "Deleted", "success");
+      setDeleteOpen(false);
+      closeDetail();
+      await reloadSkills();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`${t.skills.deleteFailed ?? "Delete failed"}: ${msg}`, "error");
+    } finally {
+      setDeleting(false);
+    }
+  }, [detail, closeDetail, reloadSkills, showToast, t]);
+
+  const handleCloneToUser = useCallback(async () => {
+    if (!detail) return;
+    setSaving(true);
+    try {
+      await api.createSkill({
+        name: detail.name,
+        category: detail.category ?? undefined,
+        content: editContent,
+      });
+      showToast(t.skills.skillCreated ?? "Skill created", "success");
+      await reloadSkills();
+      const fresh = await api.getSkill(detail.name);
+      setDetail(fresh);
+      setEditContent(fresh.content);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`${t.skills.createFailed ?? "Create failed"}: ${msg}`, "error");
+    } finally {
+      setSaving(false);
+    }
+  }, [detail, editContent, reloadSkills, showToast, t]);
+
+  const handleCreate = useCallback(async () => {
+    const name = createName.trim();
+    if (!name) {
+      showToast(t.skills.nameRequired ?? "Skill name required", "error");
+      return;
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$/.test(name)) {
+      showToast(t.skills.invalidName ?? "Invalid name", "error");
+      return;
+    }
+    if (createCategory && !/^[A-Za-z0-9][A-Za-z0-9_\-/]{0,63}$/.test(createCategory.trim())) {
+      showToast(t.skills.invalidCategory ?? "Invalid category", "error");
+      return;
+    }
+    if (!createContent.trim()) {
+      showToast(t.skills.contentRequired ?? "Content required", "error");
+      return;
+    }
+    setCreating(true);
+    try {
+      await api.createSkill({
+        name,
+        category: createCategory.trim() || undefined,
+        content: createContent,
+      });
+      showToast(t.skills.skillCreated ?? "Skill created", "success");
+      setShowCreate(false);
+      setCreateName("");
+      setCreateCategory("");
+      const list = await reloadSkills();
+      const created = list.find((s) => s.name === name);
+      if (created) {
+        await openDetail(created);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`${t.skills.createFailed ?? "Create failed"}: ${msg}`, "error");
+    } finally {
+      setCreating(false);
+    }
+  }, [createName, createCategory, createContent, reloadSkills, openDetail, showToast, t]);
 
   /* ---- Derived data ---- */
   const lowerSearch = search.toLowerCase();
@@ -194,6 +351,18 @@ export default function SkillsPage() {
       setEnd(null);
       return;
     }
+    if (selected) {
+      setAfterTitle(
+        <span className="whitespace-nowrap text-xs text-muted-foreground font-mono-ui">
+          {selected.name}
+        </span>,
+      );
+      setEnd(null);
+      return () => {
+        setAfterTitle(null);
+        setEnd(null);
+      };
+    }
     setAfterTitle(
       <span className="whitespace-nowrap text-xs text-muted-foreground">
         {t.skills.enabledOf
@@ -202,32 +371,48 @@ export default function SkillsPage() {
       </span>,
     );
     setEnd(
-      <div className="relative w-full min-w-0 sm:max-w-xs">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-        <Input
-          className="h-8 pl-8 pr-7 text-xs"
-          placeholder={t.common.search}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        {search && (
+      <div className="flex items-center gap-2 w-full sm:max-w-md">
+        {view === "skills" && (
           <Button
-            ghost
+            outlined
             size="xs"
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            onClick={() => setSearch("")}
-            aria-label={t.common.clear}
+            onClick={() => setShowCreate(true)}
+            aria-label={t.skills.create ?? "New skill"}
+            className="shrink-0"
           >
-            <X />
+            <Plus />
+            <span className="hidden sm:inline">
+              {t.skills.create ?? "New skill"}
+            </span>
           </Button>
         )}
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            className="h-8 pl-8 pr-7 text-xs"
+            placeholder={t.common.search}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {search && (
+            <Button
+              ghost
+              size="xs"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => setSearch("")}
+              aria-label={t.common.clear}
+            >
+              <X />
+            </Button>
+          )}
+        </div>
       </div>,
     );
     return () => {
       setAfterTitle(null);
       setEnd(null);
     };
-  }, [enabledCount, loading, search, setAfterTitle, setEnd, skills.length, t]);
+  }, [enabledCount, loading, search, selected, setAfterTitle, setEnd, skills.length, t, view]);
 
   const filteredToolsets = useMemo(() => {
     return toolsets.filter(
@@ -253,6 +438,21 @@ export default function SkillsPage() {
       <PluginSlot name="skills:top" />
       <Toast toast={toast} />
 
+      {selected ? (
+        <SkillDetailPanel
+          selected={selected}
+          detail={detail}
+          loading={detailLoading}
+          editContent={editContent}
+          setEditContent={setEditContent}
+          saving={saving}
+          onClose={closeDetail}
+          onSave={handleSave}
+          onDelete={() => setDeleteOpen(true)}
+          onClone={handleCloneToUser}
+          t={t}
+        />
+      ) : (
       <div className="flex flex-col sm:flex-row sm:items-start gap-4">
         <aside aria-label={t.skills.title} className="sm:w-56 sm:shrink-0">
           <div className="sm:sticky sm:top-0">
@@ -363,7 +563,9 @@ export default function SkillsPage() {
                         skill={skill}
                         toggling={togglingSkills.has(skill.name)}
                         onToggle={() => handleToggleSkill(skill)}
+                        onSelect={() => openDetail(skill)}
                         noDescriptionLabel={t.skills.noDescription}
+                        readOnlyLabel={t.skills.readOnlyBadge ?? "Read-only"}
                       />
                     ))}
                   </div>
@@ -406,7 +608,9 @@ export default function SkillsPage() {
                         skill={skill}
                         toggling={togglingSkills.has(skill.name)}
                         onToggle={() => handleToggleSkill(skill)}
+                        onSelect={() => openDetail(skill)}
                         noDescriptionLabel={t.skills.noDescription}
+                        readOnlyLabel={t.skills.readOnlyBadge ?? "Read-only"}
                       />
                     ))}
                   </div>
@@ -492,7 +696,89 @@ export default function SkillsPage() {
           )}
         </div>
       </div>
+      )}
       <PluginSlot name="skills:bottom" />
+
+      <ConfirmDialog
+        open={deleteOpen}
+        title={t.skills.deleteConfirmTitle ?? "Delete skill"}
+        description={
+          (t.skills.deleteConfirmHint ?? "This will permanently delete the skill.") +
+          (detail ? `\n${detail.name}` : "")
+        }
+        confirmLabel={t.skills.delete ?? "Delete"}
+        cancelLabel={t.skills.cancel ?? "Cancel"}
+        destructive
+        loading={deleting}
+        onCancel={() => !deleting && setDeleteOpen(false)}
+        onConfirm={handleDelete}
+      />
+
+      {showCreate && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-skill-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !creating) setShowCreate(false);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        >
+          <div className="relative w-full max-w-2xl mx-4 border border-border bg-card shadow-lg flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-border">
+              <h2
+                id="create-skill-title"
+                className="font-expanded text-sm font-bold tracking-[0.08em] uppercase"
+              >
+                {t.skills.createTitle ?? "Create skill"}
+              </h2>
+              <Button
+                ghost
+                size="xs"
+                onClick={() => !creating && setShowCreate(false)}
+                aria-label={t.skills.cancel ?? "Cancel"}
+              >
+                <X />
+              </Button>
+            </div>
+            <div className="flex flex-col gap-3 p-4">
+              <Input
+                placeholder={t.skills.namePlaceholder ?? "skill-name"}
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                disabled={creating}
+              />
+              <Input
+                placeholder={
+                  t.skills.categoryPlaceholder ?? "category (optional)"
+                }
+                value={createCategory}
+                onChange={(e) => setCreateCategory(e.target.value)}
+                disabled={creating}
+              />
+              <textarea
+                value={createContent}
+                onChange={(e) => setCreateContent(e.target.value)}
+                disabled={creating}
+                spellCheck={false}
+                className="font-mono text-xs min-h-[280px] w-full p-3 border border-border bg-muted/10 outline-none focus:border-primary"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 p-3 border-t border-border">
+              <Button
+                outlined
+                onClick={() => setShowCreate(false)}
+                disabled={creating}
+              >
+                {t.skills.cancel ?? "Cancel"}
+              </Button>
+              <Button onClick={handleCreate} disabled={creating}>
+                {creating ? "…" : t.skills.create ?? "Create"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -501,11 +787,28 @@ function SkillRow({
   skill,
   toggling,
   onToggle,
+  onSelect,
   noDescriptionLabel,
+  readOnlyLabel,
 }: SkillRowProps) {
   return (
-    <div className="group flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40">
-      <div className="pt-0.5 shrink-0">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className="group flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40 cursor-pointer focus:outline-none focus:bg-muted/40"
+    >
+      <div
+        className="pt-0.5 shrink-0"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <Switch
           checked={skill.enabled}
           onCheckedChange={onToggle}
@@ -521,12 +824,144 @@ function SkillRow({
           >
             {skill.name}
           </span>
+          {skill.writable === false && (
+            <span
+              className="inline-flex items-center gap-0.5 text-[9px] uppercase tracking-wider text-muted-foreground/70"
+              title={readOnlyLabel}
+            >
+              <Lock className="h-2.5 w-2.5" />
+              {readOnlyLabel}
+            </span>
+          )}
         </div>
         <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
           {skill.description || noDescriptionLabel}
         </p>
       </div>
     </div>
+  );
+}
+
+function SkillDetailPanel({
+  selected,
+  detail,
+  loading,
+  editContent,
+  setEditContent,
+  saving,
+  onClose,
+  onSave,
+  onDelete,
+  onClone,
+  t,
+}: SkillDetailPanelProps) {
+  return (
+    <Card>
+      <CardHeader className="py-3 px-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <CardTitle className="text-sm flex items-center gap-2 min-w-0">
+            <Button
+              ghost
+              size="xs"
+              onClick={onClose}
+              aria-label={t.skills.backToList ?? "Back"}
+            >
+              <ArrowLeft />
+            </Button>
+            <Package className="h-4 w-4 shrink-0" />
+            <span className="font-mono-ui truncate">{selected.name}</span>
+            {detail?.category && (
+              <Badge tone="secondary" className="text-[10px]">
+                {prettyCategory(detail.category, t.common.general)}
+              </Badge>
+            )}
+            {detail && !detail.writable && (
+              <Badge
+                tone="outline"
+                className="text-[10px] inline-flex items-center gap-1"
+              >
+                <Lock className="h-2.5 w-2.5" />
+                {t.skills.readOnlyBadge ?? "Read-only"}
+              </Badge>
+            )}
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {detail?.writable && (
+              <>
+                <Button onClick={onSave} disabled={saving} size="sm">
+                  <Save />
+                  {saving
+                    ? t.skills.saving ?? "Saving..."
+                    : t.skills.save ?? "Save"}
+                </Button>
+                <Button
+                  outlined
+                  destructive
+                  onClick={onDelete}
+                  disabled={saving}
+                  size="sm"
+                >
+                  <Trash2 />
+                  {t.skills.delete ?? "Delete"}
+                </Button>
+              </>
+            )}
+            {detail && !detail.writable && (
+              <Button onClick={onClone} disabled={saving} size="sm">
+                <Copy />
+                {t.skills.cloneToUser ?? "Clone to user dir"}
+              </Button>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 flex flex-col gap-3">
+        {loading ? (
+          <div className="py-12 flex items-center justify-center">
+            <Spinner className="text-2xl text-primary" />
+          </div>
+        ) : detail ? (
+          <>
+            <div className="grid gap-1 text-xs text-muted-foreground">
+              {detail.description && <div>{detail.description}</div>}
+              {detail.source_dir && (
+                <div>
+                  <span className="uppercase text-[9px] tracking-wider mr-1">
+                    {t.skills.sourceDir ?? "Source"}:
+                  </span>
+                  <span className="font-mono">{detail.source_dir}</span>
+                </div>
+              )}
+              {detail.path && (
+                <div>
+                  <span className="uppercase text-[9px] tracking-wider mr-1">
+                    {t.skills.pathLabel ?? "Path"}:
+                  </span>
+                  <span className="font-mono break-all">{detail.path}</span>
+                </div>
+              )}
+              {!detail.writable && (
+                <div className="text-amber-300/80 text-[11px]">
+                  {t.skills.readOnlyHint ??
+                    "Built-in skill is read-only. Clone to ~/.hermes/skills/ to edit."}
+                </div>
+              )}
+            </div>
+            <textarea
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              disabled={!detail.writable || saving}
+              spellCheck={false}
+              className="font-mono text-xs min-h-[420px] w-full p-3 border border-border bg-muted/10 outline-none focus:border-primary disabled:opacity-70"
+            />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-8">
+            {t.skills.loadDetailFailed ?? "Failed to load"}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -556,7 +991,24 @@ interface PanelItemProps {
 
 interface SkillRowProps {
   noDescriptionLabel: string;
+  readOnlyLabel: string;
+  onSelect: () => void;
   onToggle: () => void;
   skill: SkillInfo;
   toggling: boolean;
+}
+
+interface SkillDetailPanelProps {
+  selected: SkillInfo;
+  detail: SkillDetail | null;
+  loading: boolean;
+  editContent: string;
+  setEditContent: (v: string) => void;
+  saving: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  onDelete: () => void;
+  onClone: () => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: any;
 }

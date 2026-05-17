@@ -203,7 +203,90 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, enabled }),
     }),
+  getSkill: (name: string) =>
+    fetchJSON<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
+  updateSkill: (name: string, content: string) =>
+    fetchJSON<{ ok: boolean; name: string; path: string }>(
+      `/api/skills/${encodeURIComponent(name)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      },
+    ),
+  createSkill: (body: { name: string; category?: string; content: string }) =>
+    fetchJSON<{ ok: boolean; name: string; category: string | null; path: string }>(
+      "/api/skills",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+  deleteSkill: (name: string) =>
+    fetchJSON<{ ok: boolean; name: string }>(
+      `/api/skills/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
   getToolsets: () => fetchJSON<ToolsetInfo[]>("/api/tools/toolsets"),
+
+  // Memory store admin
+  getMemoryStats: () => fetchJSON<MemoryStats>("/api/memory/stats"),
+  listMemoryFacts: (params: {
+    q?: string;
+    category?: string;
+    min_trust?: number;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.category) qs.set("category", params.category);
+    if (typeof params.min_trust === "number")
+      qs.set("min_trust", String(params.min_trust));
+    if (typeof params.limit === "number") qs.set("limit", String(params.limit));
+    const qstr = qs.toString();
+    return fetchJSON<{ facts: MemoryFact[]; count: number }>(
+      `/api/memory/facts${qstr ? `?${qstr}` : ""}`,
+    );
+  },
+  getMemoryFact: (id: number) =>
+    fetchJSON<MemoryFactDetail>(`/api/memory/facts/${id}`),
+  createMemoryFact: (body: { content: string; category?: string; tags?: string }) =>
+    fetchJSON<{ ok: boolean; fact_id: number }>("/api/memory/facts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateMemoryFact: (
+    id: number,
+    body: {
+      content?: string;
+      category?: string;
+      tags?: string;
+      trust_delta?: number;
+    },
+  ) =>
+    fetchJSON<{ ok: boolean; fact_id: number }>(`/api/memory/facts/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteMemoryFact: (id: number) =>
+    fetchJSON<{ ok: boolean; fact_id: number }>(`/api/memory/facts/${id}`, {
+      method: "DELETE",
+    }),
+  listMemoryEntities: (limit = 200) =>
+    fetchJSON<{ entities: MemoryEntity[]; count: number }>(
+      `/api/memory/entities?limit=${limit}`,
+    ),
+  listMemoryBanks: () =>
+    fetchJSON<{ banks: MemoryBank[]; count: number }>("/api/memory/banks"),
+  rebuildMemoryBank: (category: string) =>
+    fetchJSON<{ ok: boolean; category: string }>("/api/memory/banks/rebuild", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category }),
+    }),
 
   // Session search (FTS5)
   searchSessions: (q: string) =>
@@ -571,6 +654,61 @@ export interface SkillInfo {
   description: string;
   category: string;
   enabled: boolean;
+  writable?: boolean;
+  source_dir?: string;
+  path?: string;
+}
+
+export interface SkillDetail {
+  name: string;
+  category: string | null;
+  description: string;
+  path: string;
+  source_dir: string;
+  writable: boolean;
+  content: string;
+  frontmatter: Record<string, unknown>;
+}
+
+export interface MemoryFact {
+  fact_id: number;
+  content: string;
+  category: string;
+  tags: string;
+  trust_score: number;
+  retrieval_count: number;
+  helpful_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryFactDetail extends MemoryFact {
+  entities: { entity_id: number; name: string; entity_type: string }[];
+}
+
+export interface MemoryEntity {
+  entity_id: number;
+  name: string;
+  entity_type: string;
+  aliases: string;
+  created_at: string;
+  fact_count: number;
+}
+
+export interface MemoryBank {
+  bank_name: string;
+  category: string;
+  dim: number;
+  fact_count: number;
+  updated_at: string;
+}
+
+export interface MemoryStats {
+  facts: number;
+  entities: number;
+  banks: number;
+  categories: { category: string; count: number }[];
+  backend: string;
 }
 
 export interface ToolsetInfo {

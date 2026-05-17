@@ -491,44 +491,76 @@ class FactRetriever:
         with rank scoring. Normalizes FTS5 rank to [0, 1] range.
         """
         conn = self.store._conn
+        backend = getattr(self.store, "_backend", "sqlite")
 
-        # Build query - FTS5 rank is negative (lower = better match)
-        # We need to join facts_fts with facts to get all columns
+        # Build query - FTS5 rank is negative (lower = better match);
+        # MySQL FULLTEXT score is positive (higher = better).
+        # Both branches expose ``raw_rank`` in the row scaled so larger
+        # raw_rank means better match (i.e. for SQLite we use abs(rank)).
         params: list = []
-        where_clauses = ["facts_fts MATCH ?"]
-        params.append(query)
+        if backend == "mysql":
+            # ngram parser handles CJK; NATURAL LANGUAGE MODE matches the
+            # FTS5 ``MATCH ?`` default. Score is non-negative; bigger is
+            # better, so we ORDER BY DESC and feed the same scaled value
+            # downstream.
+            where_clauses = ["MATCH(f.content, f.tags) AGAINST(? IN NATURAL LANGUAGE MODE)"]
+            params.append(query)
+            if category:
+                where_clauses.append("f.category = ?")
+                params.append(category)
+            where_clauses.append("f.trust_score >= ?")
+            params.append(min_trust)
+            where_sql = " AND ".join(where_clauses)
 
-        if category:
-            where_clauses.append("f.category = ?")
-            params.append(category)
+            # Repeat the AGAINST expression in the SELECT so we can ORDER
+            # BY it; cheaper than wrapping in a derived table at our row
+            # counts.  ``_score`` is positive-better and used as-is below.
+            sql = f"""
+                SELECT f.*,
+                       MATCH(f.content, f.tags) AGAINST(? IN NATURAL LANGUAGE MODE) AS _score
+                FROM facts f
+                WHERE {where_sql}
+                ORDER BY _score DESC
+                LIMIT ?
+            """
+            params.insert(0, query)  # for the SELECT-side AGAINST repetition
+            params.append(limit)
+        else:
+            where_clauses = ["facts_fts MATCH ?"]
+            params.append(query)
+            if category:
+                where_clauses.append("f.category = ?")
+                params.append(category)
+            where_clauses.append("f.trust_score >= ?")
+            params.append(min_trust)
+            where_sql = " AND ".join(where_clauses)
 
-        where_clauses.append("f.trust_score >= ?")
-        params.append(min_trust)
-
-        where_sql = " AND ".join(where_clauses)
-
-        sql = f"""
-            SELECT f.*, facts_fts.rank as fts_rank_raw
-            FROM facts_fts
-            JOIN facts f ON f.fact_id = facts_fts.rowid
-            WHERE {where_sql}
-            ORDER BY facts_fts.rank
-            LIMIT ?
-        """
-        params.append(limit)
+            sql = f"""
+                SELECT f.*, facts_fts.rank as fts_rank_raw
+                FROM facts_fts
+                JOIN facts f ON f.fact_id = facts_fts.rowid
+                WHERE {where_sql}
+                ORDER BY facts_fts.rank
+                LIMIT ?
+            """
+            params.append(limit)
 
         try:
             rows = conn.execute(sql, params).fetchall()
         except Exception:
-            # FTS5 MATCH can fail on malformed queries — fall back to empty
+            # FTS MATCH can fail on malformed queries — fall back to empty
             return []
 
         if not rows:
             return []
 
-        # Normalize FTS5 rank: rank is negative, lower = better
-        # Convert to positive score in [0, 1] range
-        raw_ranks = [abs(row["fts_rank_raw"]) for row in rows]
+        # Normalize relevance: rows expose either FTS5 ``fts_rank_raw``
+        # (negative; abs() gives positive-better) or MySQL ``_score``
+        # (already positive-better).  Scale to [0, 1] either way.
+        if backend == "mysql":
+            raw_ranks = [float(row["_score"]) for row in rows]
+        else:
+            raw_ranks = [abs(row["fts_rank_raw"]) for row in rows]
         max_rank = max(raw_ranks) if raw_ranks else 1.0
         max_rank = max(max_rank, 1e-6)  # avoid div by zero
 
@@ -536,6 +568,7 @@ class FactRetriever:
         for row, raw_rank in zip(rows, raw_ranks):
             fact = dict(row)
             fact.pop("fts_rank_raw", None)
+            fact.pop("_score", None)
             fact["fts_rank"] = raw_rank / max_rank  # normalize to [0, 1]
             results.append(fact)
 

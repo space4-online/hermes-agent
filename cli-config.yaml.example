@@ -438,6 +438,48 @@ prompt_caching:
 #                           # extra_body:
 #                           #   enable_thinking: false
 
+
+# =============================================================================
+# Storage backend (state.db / kanban.db / memory_store.db / response_store.db)
+# =============================================================================
+# Where Hermes Agent persists session, task, memory and response-cache data.
+#
+# Default `sqlite` keeps everything in HERMES_HOME (~/.hermes/*.db).
+# Setting `mysql` routes the same data to an external MySQL service so
+# the agent stays stateless on disk and can be migrated by simply
+# pointing a fresh install at the same database.  Schema for every
+# store is shipped in `sql/mysql/<store>/V*.sql`; apply with:
+#
+#     python -m hermes_db.migrate
+#
+# All keys may be overridden via env vars HERMES_DB_BACKEND / HERMES_DB_HOST
+# / HERMES_DB_PORT / HERMES_DB_USER / HERMES_DB_PASSWORD / HERMES_DB_NAME
+# / HERMES_DB_CHARSET / HERMES_DB_POOL_SIZE / HERMES_DB_CONNECT_TIMEOUT.
+#
+# storage:
+#   backend: mysql                # sqlite (default) | mysql
+#   mysql:
+#     host: 127.0.0.1
+#     port: 3306
+#     user: hermes
+#     password: "<replace-me>"
+#     database: hermes
+#     charset: utf8mb4
+#     pool_size: 5
+#     connect_timeout: 10
+#     autocommit: false
+#     ssl_disabled: false
+#     # Optional: per-store databases for ops isolation.
+#     # per_store_database:
+#     #   state: hermes_state
+#     #   kanban: hermes_kanban
+#     #   memory_store: hermes_memory
+#     #   response_store: hermes_responses
+#     # Free-form pymysql.connect kwargs (e.g. ssl, init_command).
+#     # extra:
+#     #   ssl: {ca: /etc/ssl/certs/ca-certificates.crt}
+
+
 # =============================================================================
 # Persistent Memory
 # =============================================================================

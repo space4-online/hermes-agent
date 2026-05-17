@@ -333,6 +333,31 @@ class SessionDB:
         self.db_path = db_path or DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Backend gate — the MySQL DDL is in place
+        # (``sql/mysql/state/V1__init.sql`` covers sessions, messages,
+        # state_meta and the Telegram DM topic tables) but the in-place
+        # SQL rewrite for SessionDB's ~3000 lines of queries is sized
+        # for its own follow-up commit.  Until then, asking for the
+        # state store on MySQL trips a clear error instead of silently
+        # falling back to a wrong code path.  The SQLite path below is
+        # untouched (zero-regression guarantee).
+        try:
+            from hermes_db import get_backend as _get_backend
+            _active_backend = _get_backend()
+        except Exception:
+            _active_backend = "sqlite"
+        if _active_backend == "mysql":
+            err = RuntimeError(
+                "hermes_state.SessionDB: MySQL backend is not yet wired "
+                "through this module.  The DDL exists "
+                "(sql/mysql/state/V1__init.sql) but the in-place SQL "
+                "rewrite for the ~3000-line SessionDB is pending.  "
+                "Either set storage.backend = sqlite or wait for the "
+                "state-mysql follow-up."
+            )
+            _set_last_init_error(f"{type(err).__name__}: {err}")
+            raise err
+
         self._lock = threading.Lock()
         self._write_count = 0
         try:

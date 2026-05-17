@@ -95,6 +95,12 @@ DEFAULT_DIST_OWNED: Tuple[str, ...] = (
 # protected on update. Must stay consistent with
 # ``profiles.py::_DEFAULT_EXPORT_EXCLUDE_ROOT`` plus the ``local/``
 # convention for user customizations.
+#
+# When the active storage backend is MySQL the listed ``*.db`` files
+# are simply absent from HERMES_HOME (state lives in the server). The
+# exclusion list is still safe in that mode — a no-op for missing
+# files, plus protection if a stale SQLite snapshot is left behind
+# from a prior sqlite session.
 USER_OWNED_EXCLUDE: frozenset = frozenset({
     # Credentials & runtime secrets
     "auth.json", ".env",
@@ -102,6 +108,8 @@ USER_OWNED_EXCLUDE: frozenset = frozenset({
     "state.db", "state.db-shm", "state.db-wal",
     "hermes_state.db", "response_store.db",
     "response_store.db-shm", "response_store.db-wal",
+    "kanban.db", "kanban.db-shm", "kanban.db-wal",
+    "memory_store.db", "memory_store.db-shm", "memory_store.db-wal",
     "gateway.pid", "gateway_state.json", "processes.json",
     "auth.lock", "active_profile", ".update_check",
     "errors.log", ".hermes_history",
