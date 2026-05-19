@@ -48,13 +48,14 @@ services:
   gateway:
     build:
       context: .
-      # 复用上次构建的镜像层缓存，避免反复重跑 npm/uv 安装。
-      # 配合 BUILDKIT_INLINE_CACHE=1 把缓存元数据嵌进镜像本身，
-      # 即使中间清理过 builder cache 也能从镜像反推出 layer。
-      cache_from:
-        - hermes-agent:latest
+      # 本机持续构建场景：依靠 BuildKit builder cache + Dockerfile 里的
+      # --mount=type=cache,target=/root/.cache/uv 即可跨构建复用；不需要
+      # cache_from。之前加的 cache_from: hermes-agent:latest 会被 BuildKit
+      # 误当作 remote registry image 去拉（走 daemon 配的 daocloud 镜像加速器），
+      # 导致 403 Forbidden，反而让 build 在第一步就报错。
       args:
-        # 把缓存元数据写进镜像（必须配合 DOCKER_BUILDKIT=1）
+        # 把缓存元数据写进镜像本身（必须配合 DOCKER_BUILDKIT=1）；
+        # 跨主机构建时可作为 cache_from 源，本机构建不影响。
         BUILDKIT_INLINE_CACHE: "1"
         # 构建期国内加速（如 GH Runner 上构建可设为空）
         APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}

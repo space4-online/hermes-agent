@@ -105,19 +105,13 @@ jobs:
             export HERMES_UID=$(id -u)
             export HERMES_GID=$(id -g)
 
-            # 开启 BuildKit：
-            #   1. 使 Dockerfile 中 --mount=type=cache,target=/root/.cache/uv 生效
-            #      （uv wheel 缓存跨构建复用，避免重复下载 asyncpg/numpy/av）
-            #   2. 启用 docker-compose.yml 里的 BUILDKIT_INLINE_CACHE 与 cache_from
-            #      复用上次镜像 layer。
+            # 开启 BuildKit：使 Dockerfile 中 --mount=type=cache,target=/root/.cache/uv 生效
+            # （uv wheel 缓存跨构建复用，避免重复下载 asyncpg/numpy/av）。
             export DOCKER_BUILDKIT=1
             export COMPOSE_DOCKER_CLI_BUILD=1
 
             echo "==> docker compose build gateway"
             cd $PROJECT_DIR
-            # 预拉一下上次的 hermes-agent 镜像作为 cache_from 源（首次部署会 fail 但不阻断）
-            docker image inspect hermes-agent:latest >/dev/null 2>&1 || \
-              echo "NOTE: hermes-agent:latest not present yet, first build will be a full build."
             docker compose -f docker-compose.yml build gateway
 
             echo "==> docker compose up -d mysql（首次启动会初始化 /data/hermes-mysql）"
