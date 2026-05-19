@@ -104,6 +104,13 @@ RUN touch ./README.md
 # the per-stream stalls in the first place.
 ENV UV_HTTP_TIMEOUT=600
 ENV UV_CONCURRENT_DOWNLOADS=4
+# 网络出错时重试 5 次（默认 3）。在国内镜像偶发回源抖动时
+# 避免一次失败就让整层 cache miss。
+ENV UV_HTTP_RETRIES=5
+# 禁止从源码构建（只走 wheel）。hermes-agent[all] 里的依赖都有预编译
+# manylinux wheel，禁源码后可避免某些包退化为 sdist 后调 gcc/python3-dev
+# 动辄额外耗时几十秒。
+ENV UV_ONLY_BINARY=:all:
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --extra all
 
