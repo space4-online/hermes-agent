@@ -117,7 +117,7 @@ ENV UV_HTTP_RETRIES=5
 # 注：不能设 UV_ONLY_BINARY=:all:，hermes-agent[all] 中 python-olm 等包
 # 没有预编译 wheel，全局禁 sdist 会直接让 uv sync 失败。
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --extra all
+    uv sync --frozen --no-install-project --extra all --extra mysql
 
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.
