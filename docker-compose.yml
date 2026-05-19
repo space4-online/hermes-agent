@@ -89,14 +89,17 @@ services:
       - HERMES_DB_PASSWORD=${MYSQL_PASSWORD}
       # ----- Hermes 主模型（从 env_file 注入 DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL） -----
       # HERMES_MODEL 控制默认推理模型；gateway 上下文会读取该环境变量。
-      # 默认走 OpenRouter 路由 deepseek-v4-pro：DeepSeek 官方 API 在部分服务器出
-      # 口 IP 会返回 403 "This model is not available in your region"，走 OpenRouter
-      # 可避开该限制并同时享受 provider routing/cache 。
-      # 若账号 region 已能直连 DeepSeek，可在 hermes.env 设置：
+      # 当前默认走阿里百炼 DashScope 上的 deepseek-v3.1：
+      #   - DeepSeek 官方 API 在部分出口 IP 会 403 "region"受限
+      #   - OpenRouter 账号可能未充值（402 Insufficient credits）
+      #   - 阿里百炼 deepseek-v3.1 在国内出口 IP 可直接调用
+      # 本机 key 是国内版，需重写 DASHSCOPE_BASE_URL 为国内端点。
+      # 若后续账号 region 能直连 DeepSeek，可在 hermes.env 设置：
       #   HERMES_INFERENCE_PROVIDER=deepseek
       #   HERMES_MODEL=deepseek-v4-pro
-      - HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-openrouter}
-      - HERMES_MODEL=${HERMES_MODEL:-deepseek/deepseek-v4-pro}
+      - HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-alibaba}
+      - HERMES_MODEL=${HERMES_MODEL:-deepseek-v3.1}
+      - DASHSCOPE_BASE_URL=${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       # ----- OpenAI 兼容 API server -----
       # API_SERVER_HOST/PORT/KEY 不在这里注入：hermes_cli 启动时会 load_hermes_dotenv
       # 加载 ~/.hermes/.env（容器内 /opt/data/.env）且 override=True。在 docker-compose 里再
