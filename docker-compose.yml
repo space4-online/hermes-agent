@@ -48,7 +48,14 @@ services:
   gateway:
     build:
       context: .
+      # 复用上次构建的镜像层缓存，避免反复重跑 npm/uv 安装。
+      # 配合 BUILDKIT_INLINE_CACHE=1 把缓存元数据嵌进镜像本身，
+      # 即使中间清理过 builder cache 也能从镜像反推出 layer。
+      cache_from:
+        - hermes-agent:latest
       args:
+        # 把缓存元数据写进镜像（必须配合 DOCKER_BUILDKIT=1）
+        BUILDKIT_INLINE_CACHE: "1"
         # 构建期国内加速（如 GH Runner 上构建可设为空）
         APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}

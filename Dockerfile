@@ -98,6 +98,12 @@ RUN npm install --prefer-offline --no-audit && \
 # The editable link is created after the source copy below.
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
+# Increase uv's HTTP timeout (default 30s) so large wheels like
+# asyncpg/numpy/av don't fail with "network timeout" on slow mirrors.
+# UV_CONCURRENT_DOWNLOADS=4 reduces bandwidth contention that triggers
+# the per-stream stalls in the first place.
+ENV UV_HTTP_TIMEOUT=600
+ENV UV_CONCURRENT_DOWNLOADS=4
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --extra all
 
