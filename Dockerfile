@@ -117,7 +117,12 @@ ENV UV_HTTP_RETRIES=5
 # 注：不能设 UV_ONLY_BINARY=:all:，hermes-agent[all] 中 python-olm 等包
 # 没有预编译 wheel，全局禁 sdist 会直接让 uv sync 失败。
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --extra all --extra mysql
+    uv sync --frozen --no-install-project --extra all
+
+# uv.lock 没有锁定 [mysql] extra（PyMySQL）。直接通过 uv pip install 单独装上，避免
+# 重新 lock 整个 [all] 集合。后端 ResponseStore 需要 PyMySQL 才能启动。
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-cache-dir 'PyMySQL==1.1.1'
 
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.
