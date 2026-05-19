@@ -1,0 +1,7 @@
+name: dashscope
+version: 1.0.0
+description: "阿里百炼 DashScope 万相文生图后端 (wan2.6-t2i)。国内直连，无需翻墙。"
+author: codeshark
+kind: backend
+requires_env:
+  - DASHSCOPE_API_KEY
