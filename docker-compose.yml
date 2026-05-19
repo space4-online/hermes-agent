@@ -89,8 +89,14 @@ services:
       - HERMES_DB_PASSWORD=${MYSQL_PASSWORD}
       # ----- Hermes 主模型（从 env_file 注入 DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL） -----
       # HERMES_MODEL 控制默认推理模型；gateway 上下文会读取该环境变量。
-      # 如需覆盖，在 /home/server/env/hermes.env 中设置 HERMES_MODEL=...。
-      - HERMES_MODEL=${HERMES_MODEL:-deepseek-v4-pro}
+      # 默认走 OpenRouter 路由 deepseek-v4-pro：DeepSeek 官方 API 在部分服务器出
+      # 口 IP 会返回 403 "This model is not available in your region"，走 OpenRouter
+      # 可避开该限制并同时享受 provider routing/cache 。
+      # 若账号 region 已能直连 DeepSeek，可在 hermes.env 设置：
+      #   HERMES_INFERENCE_PROVIDER=deepseek
+      #   HERMES_MODEL=deepseek-v4-pro
+      - HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-openrouter}
+      - HERMES_MODEL=${HERMES_MODEL:-deepseek/deepseek-v4-pro}
       # ----- OpenAI 兼容 API server -----
       # API_SERVER_HOST/PORT/KEY 不在这里注入：hermes_cli 启动时会 load_hermes_dotenv
       # 加载 ~/.hermes/.env（容器内 /opt/data/.env）且 override=True。在 docker-compose 里再
