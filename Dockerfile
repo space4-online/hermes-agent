@@ -71,6 +71,13 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 # fails with EACCES (node_modules/ is root-owned from build time).
 ENV npm_config_install_links=false
 
+# 跳过 Camoufox 浏览器二进制下载（~300MB，从 GitHub Releases 拉，国内极慢）。
+# 触发源：@askjo/camofox-browser@1.5.2 的 postinstall = `npx camoufox-js fetch || true`，
+# 而 camoufox-js 在 fetch 命令里识别 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 直接 skip。
+# Playwright 自身的 `npx playwright install` 是显式命令，不受此变量影响，仍会下载 Chromium。
+# 反检测浏览器是可选能力，需要时可在运行时手动 `npx camoufox-js fetch`。
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
 RUN npm install --prefer-offline --no-audit && \
     npx playwright install --with-deps chromium --only-shell && \
     (cd web && npm install --prefer-offline --no-audit) && \
