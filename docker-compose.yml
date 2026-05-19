@@ -108,6 +108,10 @@ services:
       # - GOOGLE_CHAT_ALLOWED_USERS=${GOOGLE_CHAT_ALLOWED_USERS}
       # ----- 图像生成（百炼万相）-----
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      # ----- 视觉理解（百炼通义千问 VL）-----
+      - AUXILIARY_VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+      - AUXILIARY_VISION_API_KEY=${DASHSCOPE_API_KEY}
+      - AUXILIARY_VISION_MODEL=qwen-vl-max
     command: ["gateway", "run"]
 
   dashboard:
