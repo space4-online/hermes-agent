@@ -116,6 +116,11 @@ jobs:
             # gateway depends_on mysql (service_healthy)，会等 MySQL 健康后再启动
             docker compose -f docker-compose.yml up -d --force-recreate gateway
 
+            echo "==> Running database migrations"
+            # 等待 gateway 容器就绪后执行 schema 迁移（幂等，无待处理则秒完成）
+            sleep 5
+            docker exec hermes hermes db migrate || echo "WARN: db migrate failed, please check manually"
+
             echo "==> Container status:"
             docker ps --filter "name=hermes"
 
