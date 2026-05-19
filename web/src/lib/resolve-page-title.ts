@@ -28,7 +28,7 @@ export function resolvePageTitle(
   }
   const key = BUILTIN[normalized];
   if (key) {
-    return t.app.nav[key];
+    return t.app.nav[key] ?? t.app.webUi;
   }
   return t.app.webUi;
 }
