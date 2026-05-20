@@ -8,9 +8,9 @@
 model:
   # Default model to use (can be overridden with --model flag)
   # Both "default" and "model" work as the key name here.
-  # 默认使用阿里百炼 deepseek-v3.1（DeepSeek 官方 v4-pro 在国内 ECS region 受限）
-  # 可通过 HERMES_MODEL 环境变量覆盖
-  default: "deepseek-v3.1"
+  # 默认使用 DeepSeek 官方 deepseek-v4-pro（学服务器出口 IP 不受 region 限制，验证通过）
+  # 如需切换到阿里百炼 deepseek-v3.1：HERMES_INFERENCE_PROVIDER=alibaba HERMES_MODEL=deepseek-v3.1
+  default: "deepseek-v4-pro"
   
   # Inference provider selection:
   #   "auto"         - Auto-detect from credentials (default)
@@ -41,14 +41,13 @@ model:
   #   It works with both no-auth and auth-enabled server modes.
   #
   # Can also be overridden with --provider flag or HERMES_INFERENCE_PROVIDER env var.
-  # 默认走阿里百炼 (DashScope OpenAI 兼容端点)，需要 DASHSCOPE_API_KEY
-  provider: "alibaba"
+  # 默认走 DeepSeek 官方 (需要 DEEPSEEK_API_KEY)
+  provider: "deepseek"
   
   # API configuration (falls back to OPENROUTER_API_KEY env var)
   # api_key: "your-key-here"  # Uncomment to set here instead of .env
-  # 国内端点；intl 端点为 https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-  # 可通过 DASHSCOPE_BASE_URL 环境变量覆盖
-  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  # 可通过 DEEPSEEK_BASE_URL 环境变量覆盖
+  base_url: "https://api.deepseek.com"
 
   # ── Token limits — two settings, easy to confuse ──────────────────────────
   #
