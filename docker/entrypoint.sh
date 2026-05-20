@@ -10,6 +10,26 @@ INSTALL_DIR="/opt/hermes"
 # optionally remap the hermes user/group to match host-side ownership, fix volume
 # permissions, then re-exec as hermes.
 if [ "$(id -u)" = "0" ]; then
+    # --- Auto-detect UID/GID from the mounted volume owner ---
+    # Mirrors the workflow service pattern: no need to pass HERMES_UID/GID
+    # externally — we read the actual owner of the mounted data directory
+    # and remap the container user to match.  Explicit env vars still win
+    # (allows overrides in special deployments).
+    if [ -z "$HERMES_UID" ]; then
+        DETECTED_UID=$(stat -c %u "$HERMES_HOME" 2>/dev/null || echo "")
+        if [ -n "$DETECTED_UID" ] && [ "$DETECTED_UID" != "0" ] && [ "$DETECTED_UID" != "10000" ]; then
+            echo "Auto-detected volume owner UID: $DETECTED_UID (set HERMES_UID to override)"
+            HERMES_UID=$DETECTED_UID
+        fi
+    fi
+    if [ -z "$HERMES_GID" ]; then
+        DETECTED_GID=$(stat -c %g "$HERMES_HOME" 2>/dev/null || echo "")
+        if [ -n "$DETECTED_GID" ] && [ "$DETECTED_GID" != "0" ] && [ "$DETECTED_GID" != "10000" ]; then
+            echo "Auto-detected volume owner GID: $DETECTED_GID (set HERMES_GID to override)"
+            HERMES_GID=$DETECTED_GID
+        fi
+    fi
+
     if [ -n "$HERMES_UID" ] && [ "$HERMES_UID" != "$(id -u hermes)" ]; then
         echo "Changing hermes UID to $HERMES_UID"
         usermod -u "$HERMES_UID" hermes

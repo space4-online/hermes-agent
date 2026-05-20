@@ -78,8 +78,8 @@ services:
     volumes:
       - ~/.hermes:/opt/data
     environment:
-      - HERMES_UID=${HERMES_UID:-10000}
-      - HERMES_GID=${HERMES_GID:-10000}
+      - HERMES_UID=${HERMES_UID:-}
+      - HERMES_GID=${HERMES_GID:-}
       # ----- 数据库后端 -----
       # 暂不设 HERMES_DB_BACKEND=mysql：hermes_state.SessionDB 尚未完成 MySQL 迁移
       # (见 hermes_state.py 中的 RuntimeError gate)，开启后会导致会话完全无法写入，
@@ -146,8 +146,8 @@ services:
     volumes:
       - ~/.hermes:/opt/data
     environment:
-      - HERMES_UID=${HERMES_UID:-10000}
-      - HERMES_GID=${HERMES_GID:-10000}
+      - HERMES_UID=${HERMES_UID:-}
+      - HERMES_GID=${HERMES_GID:-}
       - HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-deepseek}
       - HERMES_MODEL=${HERMES_MODEL:-deepseek-v4-pro}
     # --tui 启用嵌入式 Chat 页面（内嵌 hermes TUI via PTY/WebSocket）
