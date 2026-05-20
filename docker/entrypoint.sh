@@ -77,6 +77,20 @@ fi
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
 
+# --- Derive AUXILIARY API keys from DASHSCOPE_API_KEY ---
+# AUXILIARY_VISION_API_KEY and AUXILIARY_WEB_EXTRACT_API_KEY should share the
+# same DashScope key as DASHSCOPE_API_KEY.  We can't expand them in
+# docker-compose's environment section because that uses the HOST shell at
+# compose-up time — if the host shell doesn't have DASHSCOPE_API_KEY exported,
+# the expansion produces an empty string that silently overrides the env_file
+# value.  Instead, we derive them here after entrypoint receives the final env.
+if [ -z "${AUXILIARY_VISION_API_KEY:-}" ] && [ -n "${DASHSCOPE_API_KEY:-}" ]; then
+    export AUXILIARY_VISION_API_KEY="$DASHSCOPE_API_KEY"
+fi
+if [ -z "${AUXILIARY_WEB_EXTRACT_API_KEY:-}" ] && [ -n "${DASHSCOPE_API_KEY:-}" ]; then
+    export AUXILIARY_WEB_EXTRACT_API_KEY="$DASHSCOPE_API_KEY"
+fi
+
 # Create essential directory structure.  Cache and platform directories
 # (cache/images, cache/audio, platforms/whatsapp, etc.) are created on
 # demand by the application — don't pre-create them here so new installs
@@ -97,7 +111,12 @@ if [ ! -f "$HERMES_HOME/config.yaml" ]; then
 fi
 
 # SOUL.md
-if [ ! -f "$HERMES_HOME/SOUL.md" ]; then
+# Always refresh from the image template so the deployment context section
+# (container paths, env-var sources) stays current as the image is updated.
+# Users who want to customise personality should extend this file by rebuilding
+# the image with a modified docker/SOUL.md (or append via /opt/data/.soul-custom.md
+# if a future version of hermes supports that).
+if [ -f "$INSTALL_DIR/docker/SOUL.md" ]; then
     cp "$INSTALL_DIR/docker/SOUL.md" "$HERMES_HOME/SOUL.md"
 fi
 
