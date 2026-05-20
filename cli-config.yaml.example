@@ -44,7 +44,8 @@ model:
   # 默认走 DeepSeek 官方 (需要 DEEPSEEK_API_KEY)
   provider: "deepseek"
   
-  # API configuration (falls back to OPENROUTER_API_KEY env var)
+  # API configuration (默认从 DEEPSEEK_API_KEY 环境变量读取)
+  # 项目部署不再使用 OpenRouter，因此忽略 OPENROUTER_API_KEY 这一上游兜底。
   # api_key: "your-key-here"  # Uncomment to set here instead of .env
   # 可通过 DEEPSEEK_BASE_URL 环境变量覆盖
   base_url: "https://api.deepseek.com"
@@ -387,9 +388,12 @@ prompt_caching:
 # Hermes uses lightweight "auxiliary" models for side tasks: image analysis,
 # browser screenshot analysis, web page summarization, and context compression.
 #
-# By default these use Gemini Flash via OpenRouter or Nous Portal and are
-# auto-detected from your credentials.  You do NOT need to change anything
-# here for normal usage.
+# 【本项目默认：auxiliary 全部走阿里百炼 DashScope，不再使用 OpenRouter】
+#   - vision        走 qwen-vl-max（多模态）
+#   - web_extract   走 qwen-plus（高性价比文本）
+#   - session_search走 qwen-plus
+# 运维提示：请勿在 hermes.env 中设置 OPENROUTER_API_KEY，
+# 否则 hermes auto 选择逻辑会优先走 OpenRouter。
 #
 # WARNING: Overriding these with providers other than OpenRouter or Nous Portal
 # is EXPERIMENTAL and may not work.  Not all models/providers support vision,
@@ -397,11 +401,10 @@ prompt_caching:
 # risk — if things break, reset to "auto" / empty values.
 #
 # Each task has its own provider + model pair so you can mix providers.
-# For example: OpenRouter for vision (needs multimodal), but your main
-# local endpoint for compression (just needs text).
 #
 # Provider options:
 #   "auto"       - Best available: OpenRouter → Nous Portal → main endpoint (default)
+#   "alibaba"    - 阿里百炼 DashScope（需 DASHSCOPE_API_KEY）—本项目默认。
 #   "openrouter" - Force OpenRouter (requires OPENROUTER_API_KEY)
 #   "nous"       - Force Nous Portal (requires: hermes login)
 #   "gemini"      - Force Google AI Studio direct (requires: GOOGLE_API_KEY or GEMINI_API_KEY)
@@ -416,31 +419,28 @@ prompt_caching:
 # uses "google/gemini-3-flash-preview" and Nous uses "gemini-3-flash".
 # Other providers pick a sensible default automatically.
 #
-# auxiliary:
-#   # Image analysis: vision_analyze tool + browser screenshots
-#   vision:
-#     provider: "auto"
-#     model: ""              # e.g. "google/gemini-2.5-flash", "openai/gpt-4o"
-#     timeout: 30            # LLM API call timeout (seconds)
-#     download_timeout: 30   # Image HTTP download timeout (seconds)
-#                            # Increase for slow connections or self-hosted image servers
-#
-#   # Web page scraping / summarization + browser page text extraction
-#   web_extract:
-#     provider: "auto"
-#     model: ""
-#
-#   # Session search — summarizes matching past sessions
-#   session_search:
-#     provider: "auto"
-#     model: ""
-#     timeout: 30
-#     max_concurrency: 3    # Limit parallel summaries to reduce request-burst 429s
-#     extra_body: {}        # Provider-specific OpenAI-compatible request fields
-#                           # Example for providers that support request-body
-#                           # reasoning controls:
-#                           # extra_body:
-#                           #   enable_thinking: false
+auxiliary:
+  # Image analysis: vision_analyze tool + browser screenshots
+  vision:
+    provider: "alibaba"
+    model: "qwen-vl-max"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    timeout: 30
+    download_timeout: 30
+
+  # Web page scraping / summarization + browser page text extraction
+  web_extract:
+    provider: "alibaba"
+    model: "qwen-plus"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+  # Session search — summarizes matching past sessions
+  session_search:
+    provider: "alibaba"
+    model: "qwen-plus"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    timeout: 30
+    max_concurrency: 3
 
 
 # =============================================================================

@@ -90,10 +90,8 @@ services:
       # ----- Hermes 主模型（从 env_file 注入 DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL） -----
       # HERMES_MODEL 控制默认推理模型；gateway 上下文会读取该环境变量。
       # 默认走 DeepSeek 官方 API（agent-h 出口 IP 不受 region 限制，验证通过）。
-      # 历史尝试与备选：
-      #   - 阿里百炼 DashScope（DASHSCOPE_BASE_URL 国内端点）上 deepseek-v3.1 也可用，
-      #     如需切换：HERMES_INFERENCE_PROVIDER=alibaba HERMES_MODEL=deepseek-v3.1
-      #   - OpenRouter 也可作为兜底，但需账户有 credits。
+      # 兜底链路：阿里百炼 DashScope（deepseek-v3.1 / qwen 系列），不再使用 OpenRouter。
+      # 主模型异常时切换：HERMES_INFERENCE_PROVIDER=alibaba HERMES_MODEL=deepseek-v3.1
       - HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-deepseek}
       - HERMES_MODEL=${HERMES_MODEL:-deepseek-v4-pro}
       - DASHSCOPE_BASE_URL=${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
@@ -126,6 +124,14 @@ services:
       - AUXILIARY_VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
       - AUXILIARY_VISION_API_KEY=${DASHSCOPE_API_KEY}
       - AUXILIARY_VISION_MODEL=qwen-vl-max
+      # ----- 网页抽取/摘要（百炼 qwen-plus，不再走 OpenRouter）-----
+      - AUXILIARY_WEB_EXTRACT_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+      - AUXILIARY_WEB_EXTRACT_API_KEY=${DASHSCOPE_API_KEY}
+      - AUXILIARY_WEB_EXTRACT_MODEL=qwen-plus
+      # 注：session_search / compression 等没有 env 桥接的 auxiliary 任务，
+      # 通过 ~/.hermes/config.yaml 的 auxiliary 段强制走 alibaba（见 cli-config.yaml.example）。
+      # 同时运维需在 hermes.env 中【不要设置 OPENROUTER_API_KEY】，
+      # 否则 auxiliary auto 会优先走 OpenRouter。
     command: ["gateway", "run"]
 
   dashboard:
