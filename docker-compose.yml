@@ -80,13 +80,13 @@ services:
     environment:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
-      # ----- MySQL 后端（hermes_db 切换为 mysql）-----
-      - HERMES_DB_BACKEND=mysql
-      - HERMES_DB_HOST=127.0.0.1
-      - HERMES_DB_PORT=3306
-      - HERMES_DB_NAME=${MYSQL_DATABASE:-hermes}
-      - HERMES_DB_USER=${MYSQL_USER:-hermes}
-      - HERMES_DB_PASSWORD=${MYSQL_PASSWORD}
+      # ----- 数据库后端 -----
+      # 暂不设 HERMES_DB_BACKEND=mysql：hermes_state.SessionDB 尚未完成 MySQL 迁移
+      # (见 hermes_state.py 中的 RuntimeError gate)，开启后会导致会话完全无法写入，
+      # dashboard 也读不到任何 session。暂时以 SQLite 为主：
+      #   state.db / kanban.db / memory_store.db / response_store.db
+      # 均落在 ~/.hermes（host volume），gateway 与 dashboard 共享。
+      # 等 SessionDB 完成 MySQL 适配后再统一切换。
       # ----- Hermes 主模型（从 env_file 注入 DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL） -----
       # HERMES_MODEL 控制默认推理模型；gateway 上下文会读取该环境变量。
       # 默认走 DeepSeek 官方 API（agent-h 出口 IP 不受 region 限制，验证通过）。
@@ -141,10 +141,14 @@ services:
     network_mode: host
     depends_on:
       - gateway
+    env_file:
+      - /home/server/env/hermes.env
     volumes:
       - ~/.hermes:/opt/data
     environment:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
-    # Localhost-only. For remote access, tunnel via `ssh -L 9119:localhost:9119`.
-    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]
+      - HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-deepseek}
+      - HERMES_MODEL=${HERMES_MODEL:-deepseek-v4-pro}
+    # --tui 启用嵌入式 Chat 页面（内嵌 hermes TUI via PTY/WebSocket）
+    command: ["dashboard", "--host", "0.0.0.0", "--insecure", "--no-open", "--tui"]
