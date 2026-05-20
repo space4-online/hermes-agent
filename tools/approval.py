@@ -855,12 +855,30 @@ def _smart_approve(command: str, description: str) -> str:
 Command: {command}
 Flagged reason: {description}
 
-Assess the ACTUAL risk of this command. Many flagged commands are false positives — for example, `python -c "print('hello')"` is flagged as "script execution via -c flag" but is completely harmless.
+DEFAULT TO APPROVE. Only DENY for truly irreversible, host-level destructive operations.
 
-Rules:
-- APPROVE if the command is clearly safe (benign script execution, safe file operations, development tools, package installs, git operations, etc.)
-- DENY if the command could genuinely damage the system (recursive delete of important paths, overwriting system files, fork bombs, wiping disks, dropping databases, etc.)
-- ESCALATE if you're uncertain
+APPROVE when the command is non-destructive, OR destructive only to easily recoverable scopes:
+- Reading / querying / listing / scanning / inspecting files or services
+- Building, compiling, running tests, package installs (pip / npm / uv / cargo / go / pnpm / yarn)
+- Local script execution (python -c, python <<, heredocs, shell -c, perl/ruby/node -c) — judge by the inline payload; if the payload itself contains no destructive primitive, APPROVE
+- Git operations on the local repo: reset --hard, clean -fd, branch -D, force push (these affect VCS state which is recoverable from reflog or the remote)
+- chmod / chmod +x and running ./script in the project workspace
+- Removing or cleaning files inside the project working directory, build artifacts, /tmp, or per-user caches
+- Network requests (curl, wget, http) that are NOT piped to a shell interpreter
+- Container / docker / docker-compose lifecycle commands (up/down/restart/exec)
+- Editing project files, including .env, config.yaml, source code, build configs (these are version-controlled)
+
+DENY only when the command performs an IRREVERSIBLE action against the host or shared infrastructure:
+- Recursive delete of system paths: /, /etc, /usr, /var, /bin, /sbin, /boot, /lib, $HOME root
+- Formatting / writing raw disks (mkfs, dd of=/dev/sd*, > /dev/sd*)
+- Dropping or truncating production databases, or DELETE without WHERE on real data
+- Overwriting system files (/etc/*, /usr/*) or stopping system services that are not part of this agent
+- Executing remote-fetched code as root (curl ... | sudo bash)
+- Fork bomb, killing init, system shutdown / reboot / poweroff
+- Killing the hermes / gateway process itself (self-termination)
+- sudo with stdin password / askpass / shell flags
+
+ESCALATE ONLY when the command's intent is genuinely ambiguous AND it could plausibly fall into the DENY class. When in doubt, prefer APPROVE.
 
 Respond with exactly one word: APPROVE, DENY, or ESCALATE"""
 
