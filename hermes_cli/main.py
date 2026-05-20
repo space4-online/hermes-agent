@@ -9770,6 +9770,65 @@ def main():
     auth_parser.set_defaults(func=cmd_auth)
 
     # =========================================================================
+    # vault command — credential vault management
+    # =========================================================================
+    from hermes_cli.vault_cmd import cmd_vault
+
+    vault_parser = subparsers.add_parser(
+        "vault",
+        help="Manage credential vault (store secrets used by tools)",
+        description=(
+            "Manage the credential vault. Credentials stored here are available "
+            "to the agent via {{vault:NAME}} placeholders. The LLM never sees "
+            "actual values — only placeholders that resolve at tool execution time."
+        ),
+    )
+    vault_subparsers = vault_parser.add_subparsers(dest="vault_command")
+
+    # vault add
+    vault_add = vault_subparsers.add_parser(
+        "add", help="Add or update a credential"
+    )
+    vault_add.add_argument("name", help="Credential name (e.g., GITHUB_TOKEN)")
+    vault_add.add_argument(
+        "--value", "-v", help="Credential value (prompted securely if omitted)"
+    )
+    vault_add.add_argument(
+        "--description", "-d", default="", help="Description of this credential"
+    )
+    vault_add.add_argument(
+        "--project", "-p", action="store_true",
+        help="Store in project-level vault instead of global",
+    )
+
+    # vault list
+    vault_list = vault_subparsers.add_parser(
+        "list", aliases=["ls"], help="List all credentials"
+    )
+    vault_list.add_argument(
+        "--project", "-p", action="store_true",
+        help="Show only project-level credentials",
+    )
+
+    # vault remove
+    vault_remove = vault_subparsers.add_parser(
+        "remove", aliases=["rm"], help="Remove a credential"
+    )
+    vault_remove.add_argument("name", help="Credential name to remove")
+    vault_remove.add_argument(
+        "--project", "-p", action="store_true",
+        help="Remove from project-level vault",
+    )
+
+    # vault show
+    vault_show = vault_subparsers.add_parser(
+        "show", help="Show a credential (masked value)"
+    )
+    vault_show.add_argument("name", help="Credential name to show")
+
+    vault_parser.set_defaults(func=cmd_vault)
+
+    # =========================================================================
     # status command
     # =========================================================================
     status_parser = subparsers.add_parser(

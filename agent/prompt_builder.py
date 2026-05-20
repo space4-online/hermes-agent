@@ -185,6 +185,26 @@ SKILLS_GUIDANCE = (
     "Skills that aren't maintained become liabilities."
 )
 
+VAULT_GUIDANCE = (
+    "# Credential vault\n"
+    "The user may store secrets (API keys, tokens, passwords) in a credential vault. "
+    "You can NEVER see the raw values \u2014 only metadata (name, description, scope).\n"
+    "\n"
+    "Workflow when you need a secret:\n"
+    "1. Call `list_credentials` to discover what's available (returns name + description).\n"
+    "2. Call `use_credential(name=\"X\")` to obtain a placeholder string `{{vault:X}}`.\n"
+    "3. Put that placeholder verbatim into your tool call arguments where the secret is needed. "
+    "The runtime substitutes the real value just before the tool executes; tool results "
+    "that echo the value back are also re-masked before you see them.\n"
+    "\n"
+    "Rules:\n"
+    "- NEVER ask the user to paste a secret into chat \u2014 instruct them to run "
+    "`hermes vault add <NAME>` instead.\n"
+    "- NEVER hardcode, guess, or fabricate credential values.\n"
+    "- If a credential you need isn't in the vault, tell the user the exact "
+    "`hermes vault add <NAME>` command they should run, then stop and wait."
+)
+
 KANBAN_GUIDANCE = (
     "# Kanban task execution protocol\n"
     "You have been assigned ONE task from "

@@ -194,6 +194,16 @@ TOOLSETS = {
         "tools": ["memory"],
         "includes": []
     },
+
+    "vault": {
+        "description": (
+            "Credential vault: list_credentials / use_credential. The LLM never sees "
+            "actual secret values; it gets {{vault:NAME}} placeholders that the runtime "
+            "resolves at tool execution time. Use this instead of hardcoding secrets."
+        ),
+        "tools": ["list_credentials", "use_credential"],
+        "includes": []
+    },
     
     "session_search": {
         "description": "Search and recall past conversations with summarization",

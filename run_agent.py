@@ -147,6 +147,7 @@ from agent.prompt_builder import (
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE,
     KANBAN_GUIDANCE,
+    VAULT_GUIDANCE,
     build_nous_subscription_prompt,
 )
 from agent.model_metadata import (
@@ -1888,6 +1889,10 @@ class AIAgent:
         # In-memory todo list for task planning (one per agent/session)
         from tools.todo_tool import TodoStore
         self._todo_store = TodoStore()
+
+        # Credential vault store — provides {{vault:NAME}} placeholder support.
+        # Initialized lazily on first use to avoid import overhead when unused.
+        self._vault_store = None
         
         # Load config once for memory, skills, and compression sections
         try:
@@ -5747,7 +5752,11 @@ class AIAgent:
             memory snapshot, user profile, external memory provider block,
             timestamp line.  Never marked for caching.
 
-        Joined ``stable\\n\\ncontext\\n\\nvolatile`` produces the same
+        Joined ``stable
+
+context
+
+volatile`` produces the same
         logical content the old single-string builder produced, with the
         guarantee that volatile content is at the end (cache-friendly
         ordering for any provider that does prefix caching).
@@ -5780,6 +5789,8 @@ class AIAgent:
             tool_guidance.append(SESSION_SEARCH_GUIDANCE)
         if "skill_manage" in self.valid_tool_names:
             tool_guidance.append(SKILLS_GUIDANCE)
+        if "list_credentials" in self.valid_tool_names or "use_credential" in self.valid_tool_names:
+            tool_guidance.append(VAULT_GUIDANCE)
         # Kanban worker/orchestrator lifecycle — only present when the
         # dispatcher spawned this process (kanban_show check_fn gates on
         # HERMES_KANBAN_TASK env var). Normal chat sessions never see
@@ -10449,6 +10460,17 @@ class AIAgent:
             parent_agent=self,
         )
 
+    def _get_vault_store(self):
+        """Lazily initialize and return the VaultStore instance."""
+        if self._vault_store is None:
+            try:
+                from agent.vault import VaultStore
+                self._vault_store = VaultStore()
+            except Exception as e:
+                logger.debug("Vault store initialization failed: %s", e)
+                return None
+        return self._vault_store
+
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,
                      tool_call_id: Optional[str] = None, messages: list = None,
                      pre_tool_block_checked: bool = False) -> str:
@@ -10527,7 +10549,27 @@ class AIAgent:
             )
         elif function_name == "delegate_task":
             return self._dispatch_delegate_task(function_args)
+        elif function_name in ("list_credentials", "use_credential"):
+            # Vault tools are agent-level (need access to VaultStore instance)
+            vault = self._get_vault_store()
+            if function_name == "list_credentials":
+                from tools.vault_tool import list_credentials_handler
+                return list_credentials_handler(function_args, vault=vault)
+            else:
+                from tools.vault_tool import use_credential_handler
+                return use_credential_handler(function_args, vault=vault)
         else:
+            # Resolve vault placeholders in tool arguments before execution
+            vault = self._get_vault_store()
+            if vault:
+                from agent.vault_placeholder import resolve_placeholders
+                resolved_args = {}
+                for k, v in function_args.items():
+                    if isinstance(v, str) and "{{vault:" in v:
+                        resolved_args[k] = resolve_placeholders(v, vault)
+                    else:
+                        resolved_args[k] = v
+                function_args = resolved_args
             return handle_function_call(
                 function_name, function_args, effective_task_id,
                 tool_call_id=tool_call_id,
@@ -10936,6 +10978,13 @@ class AIAgent:
                 if _is_multimodal_tool_result(function_result)
                 else function_result
             )
+            # Vault: inject placeholders in tool results before LLM sees them
+            if isinstance(_tool_content, str) and self._vault_store is not None:
+                try:
+                    from agent.vault_placeholder import inject_placeholders
+                    _tool_content = inject_placeholders(_tool_content, self._vault_store)
+                except Exception:
+                    pass
             tool_msg = {
                 "role": "tool",
                 "name": name,
@@ -12350,6 +12399,26 @@ class AIAgent:
             # lone surrogates (U+D800-U+DFFF) that crash json.dumps() inside
             # the OpenAI SDK. Sanitizing here prevents the 3-retry cycle.
             _sanitize_messages_surrogates(api_messages)
+
+            # Vault: replace credential values with {{vault:NAME}} placeholders
+            # in all messages before they reach the LLM. Operates on the API
+            # copy only — original conversation history is not modified.
+            _vault = self._get_vault_store()
+            if _vault and _vault.all_entries():
+                try:
+                    from agent.vault_placeholder import inject_placeholders
+                    for _am in api_messages:
+                        _c = _am.get("content")
+                        if isinstance(_c, str):
+                            _am["content"] = inject_placeholders(_c, _vault)
+                        elif isinstance(_c, list):
+                            for _part in _c:
+                                if isinstance(_part, dict) and _part.get("type") == "text":
+                                    _part["text"] = inject_placeholders(
+                                        _part.get("text", ""), _vault
+                                    )
+                except Exception as _vault_err:
+                    logger.debug("Vault placeholder injection failed: %s", _vault_err)
 
             # Calculate approximate request size for logging
             total_chars = sum(len(str(msg)) for msg in api_messages)
