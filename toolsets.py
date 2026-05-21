@@ -50,6 +50,8 @@ _HERMES_CORE_TOOLS = [
     "todo", "memory",
     # Session history search
     "session_search",
+    # Credential vault (list names/descriptions, get placeholder — LLM never sees values)
+    "list_credentials", "use_credential",
     # Clarifying questions
     "clarify",
     # Code execution + delegation
