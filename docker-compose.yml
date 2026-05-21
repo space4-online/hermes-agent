@@ -163,5 +163,7 @@ services:
       - HERMES_GID=${HERMES_GID:-}
       - HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-deepseek}
       - HERMES_MODEL=${HERMES_MODEL:-deepseek-v4-pro}
+      # 容器运行时标记（与 gateway 一致，供 _is_container() 检测使用）
+      - HERMES_CONTAINER=docker
     # --tui 启用嵌入式 Chat 页面（内嵌 hermes TUI via PTY/WebSocket）
     command: ["dashboard", "--host", "0.0.0.0", "--insecure", "--no-open", "--tui"]

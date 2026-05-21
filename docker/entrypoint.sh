@@ -61,6 +61,16 @@ if [ "$(id -u)" = "0" ]; then
             echo "Warning: chown failed (rootless container?) — continuing anyway"
     fi
 
+    # Remove stale NixOS managed-mode marker from the Docker volume.  This
+    # file is only meaningful for NixOS declarative installs; in Docker it
+    # triggers managed-mode code paths that expect a NixOS activation layout
+    # and will fail with PermissionError or RuntimeError.  Clean it up as
+    # root before dropping privileges.
+    if [ -f "$HERMES_HOME/.managed" ]; then
+        echo "Removing stale .managed marker (Docker is not a NixOS-managed install)"
+        rm -f "$HERMES_HOME/.managed"
+    fi
+
     # Ensure config.yaml is readable by the hermes runtime user even if it was
     # edited on the host after initial ownership setup. Must run here (as root)
     # rather than after the gosu drop, otherwise a non-root caller like

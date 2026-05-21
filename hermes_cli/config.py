@@ -165,7 +165,18 @@ _MANAGED_SYSTEM_NAMES = {
 
 
 def get_managed_system() -> Optional[str]:
-    """Return the package manager owning this install, if any."""
+    """Return the package manager owning this install, if any.
+
+    Docker/container environments are never considered managed — the
+    .managed marker is a NixOS-only signal.  Checking it inside a
+    container causes spurious failures when the host volume contains a
+    stale .managed file with wrong ownership.
+    """
+    # Containers are never NixOS-managed installs.  Check env first to
+    # avoid filesystem I/O on the volume mount.
+    if os.environ.get("HERMES_CONTAINER") or os.path.exists("/.dockerenv"):
+        return None
+
     raw = os.getenv("HERMES_MANAGED", "").strip()
     if raw:
         normalized = raw.lower()
