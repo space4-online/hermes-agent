@@ -324,13 +324,18 @@ def _secure_dir(path):
     permissions (0750) so interactive users in the hermes group can
     share state with the gateway service.
 
+    Skipped in containers — Docker deployments share a volume between
+    gateway and dashboard processes.  Forcing 0700 breaks the dashboard
+    when containers restart at different times and the UID hasn't been
+    remapped yet.
+
     The mode can be overridden via the HERMES_HOME_MODE environment variable
     (e.g. HERMES_HOME_MODE=0701) for deployments where a web server (nginx,
     caddy, etc.) needs to traverse HERMES_HOME to reach a served subdirectory.
     The execute-only bit on a directory permits cd-through without exposing
     directory listings.
     """
-    if is_managed():
+    if is_managed() or _is_container():
         return
     try:
         mode_str = os.environ.get("HERMES_HOME_MODE", "").strip()

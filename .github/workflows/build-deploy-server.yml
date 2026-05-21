@@ -117,9 +117,10 @@ jobs:
             echo "==> docker compose up -d mysql（首次启动会初始化 /data/hermes-mysql）"
             docker compose -f docker-compose.yml up -d mysql
 
-            echo "==> docker compose up -d --force-recreate gateway"
+            echo "==> docker compose up -d --force-recreate gateway dashboard"
             # gateway depends_on mysql (service_healthy)，会等 MySQL 健康后再启动
-            docker compose -f docker-compose.yml up -d --force-recreate gateway
+            # dashboard 共享同一镜像和挂载卷，必须一同重建以确保 UID 重映射和新代码生效
+            docker compose -f docker-compose.yml up -d --force-recreate gateway dashboard
 
             echo "==> Running database migrations"
             # 等待 gateway 容器就绪后执行 schema 迁移（幂等，无待处理则秒完成）
