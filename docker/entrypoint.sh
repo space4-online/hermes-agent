@@ -59,6 +59,13 @@ if [ "$(id -u)" = "0" ]; then
         # by the mapped user on the host side.
         chown -R hermes:hermes "$HERMES_HOME" 2>/dev/null || \
             echo "Warning: chown failed (rootless container?) — continuing anyway"
+
+        # The Dockerfile chowns ui-tui + node_modules to the *default* hermes UID
+        # (10000).  When we remap hermes to a different UID above, these dirs
+        # become inaccessible and the runtime TUI build (npm run build → esbuild)
+        # fails with "permission denied" writing dist/entry.js.
+        echo "Fixing ownership of writable app dirs to hermes ($actual_hermes_uid)"
+        chown -R hermes:hermes "$INSTALL_DIR/ui-tui" "$INSTALL_DIR/node_modules" 2>/dev/null || true
     fi
 
     # Remove stale NixOS managed-mode marker from the Docker volume.  This
