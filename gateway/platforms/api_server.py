@@ -6,6 +6,7 @@ Exposes an HTTP server with endpoints:
 - POST /v1/responses               — OpenAI Responses API format (stateful via previous_response_id; X-Hermes-Session-Key supported)
 - GET  /v1/responses/{response_id} — Retrieve a stored response
 - DELETE /v1/responses/{response_id} — Delete a stored response
+- GET  /v1/sessions/{session_id}/messages — Retrieve a session's conversation history (read-only, requires API key)
 - GET  /v1/models                  — lists hermes-agent as an available model
 - GET  /v1/capabilities            — machine-readable API capabilities for external UIs
 - POST /v1/runs                    — start a run, returns run_id immediately (202)
@@ -2419,6 +2420,69 @@ class APIServerAdapter(BasePlatformAdapter):
             "deleted": True,
         })
 
+    async def _handle_get_session_messages(self, request: "web.Request") -> "web.Response":
+        """GET /v1/sessions/{session_id}/messages — retrieve a session's conversation history.
+
+        Returns the messages persisted in ``state.db`` for the given session_id
+        in OpenAI Chat Completions format. Used by external callers (e.g. the
+        codeshark backend) to hydrate a chat panel after a page refresh,
+        avoiding the need to maintain a parallel transcript store.
+
+        Auth: requires API key (same gate as session continuity in
+        /v1/chat/completions). Without an API key configured the endpoint is
+        disabled to avoid leaking history via id-guessing.
+
+        Query params:
+            include_ancestors=true|false  Walk parent_session_id chain to
+                include compression-pruned ancestors (default false).
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        if not self._api_key:
+            return web.json_response(
+                _openai_error(
+                    "Reading session history requires API_SERVER_KEY to be configured."
+                ),
+                status=403,
+            )
+
+        session_id = request.match_info["session_id"].strip()
+        if not session_id:
+            return web.json_response(_openai_error("session_id is required"), status=400)
+
+        include_ancestors = request.query.get("include_ancestors", "").lower() in {"true", "1"}
+
+        db = self._ensure_session_db()
+        if db is None:
+            return web.json_response(_openai_error("SessionDB unavailable"), status=503)
+
+        try:
+            session_row = db.get_session(session_id)
+        except Exception as e:
+            logger.warning("get_session(%s) failed: %s", session_id, e)
+            session_row = None
+        if session_row is None:
+            return web.json_response(_openai_error(f"Session not found: {session_id}"), status=404)
+
+        try:
+            # Redirect to descendant session that actually holds messages
+            # if compression has rotated the session.
+            resolved_id = db.resolve_resume_session_id(session_id)
+            messages = db.get_messages_as_conversation(
+                resolved_id, include_ancestors=include_ancestors
+            )
+        except Exception as e:
+            logger.warning("get_messages_as_conversation(%s) failed: %s", session_id, e)
+            return web.json_response(_openai_error(f"Failed to load messages: {e}"), status=500)
+
+        return web.json_response({
+            "object": "list",
+            "session_id": session_id,
+            "resolved_session_id": resolved_id,
+            "data": messages,
+        })
+
     # ------------------------------------------------------------------
     # Cron jobs API
     # ------------------------------------------------------------------
@@ -3419,6 +3483,7 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_post("/v1/responses", self._handle_responses)
             self._app.router.add_get("/v1/responses/{response_id}", self._handle_get_response)
             self._app.router.add_delete("/v1/responses/{response_id}", self._handle_delete_response)
+            self._app.router.add_get("/v1/sessions/{session_id}/messages", self._handle_get_session_messages)
             # Cron jobs management API
             self._app.router.add_get("/api/jobs", self._handle_list_jobs)
             self._app.router.add_post("/api/jobs", self._handle_create_job)
