@@ -9565,102 +9565,17 @@ class GatewayRunner:
         return t("gateway.undo.removed", count=removed_count, preview=preview)
 
     async def _handle_vault_command(self, event: MessageEvent) -> str:
-        """Handle /vault [list|show|add|remove] command."""
-        import re as _re
-        from pathlib import Path as _Path
-        try:
-            from agent.vault import VaultStore
-            from agent.vault_placeholder import mask_credential_value
-            from hermes_constants import get_hermes_home
-        except Exception as _e:
-            return f"❌ Vault module not available: {_e}"
+        """Handle /vault [list|show|add|remove] command.
+
+        Delegates to the shared formatter in ``hermes_cli.vault_shared`` so
+        every channel (messaging gateway, web chat, TUI, ACP) renders the
+        same output. See that module for the actual logic.
+        """
+        from hermes_cli.vault_shared import format_vault_command
 
         args_text = event.get_command_args().strip()
         parts = args_text.split() if args_text else []
-        subcmd = parts[0].lower() if parts else "list"
-
-        try:
-            vault = VaultStore(hermes_home=_Path(get_hermes_home()))
-        except Exception as _e:
-            return f"❌ Vault not available: {_e}"
-
-        if subcmd in ("list", "ls", ""):
-            credentials = vault.list()
-            if not credentials:
-                return (
-                    "🔐 Vault is empty.\n"
-                    "Add a credential: `/vault add NAME VALUE [description]`\n"
-                    "Or via SSH (safer): `hermes vault add NAME`"
-                )
-            lines = ["🔐 **Stored credentials:**\n"]
-            for cred in credentials:
-                desc = f" \u2014 {cred.description}" if cred.description else ""
-                lines.append(f"\u2022 `{cred.name}` ({cred.scope}){desc}")
-            return "\n".join(lines)
-
-        elif subcmd == "show":
-            if len(parts) < 2:
-                return "Usage: `/vault show NAME`"
-            name = parts[1]
-            value = vault.get(name)
-            if value is None:
-                available = [c.name for c in vault.list()]
-                avail_str = ", ".join(f"`{n}`" for n in available) if available else "(none)"
-                return f"❌ Credential `{name}` not found.\nAvailable: {avail_str}"
-            masked = mask_credential_value(value)
-            scope = "global"
-            for cred in vault.list():
-                if cred.name == name:
-                    scope = cred.scope
-                    break
-            return (
-                f"🔐 `{name}` ({scope})\n"
-                f"Value: `{masked}`\n"
-                f"Placeholder: `{{{{vault:{name}}}}}`"
-            )
-
-        elif subcmd == "add":
-            if len(parts) < 3:
-                return (
-                    "Usage: `/vault add NAME VALUE [description...]`\n"
-                    "⚠️ Prefer `hermes vault add NAME` via SSH \u2014 safer (interactive, never exposed in chat)."
-                )
-            name = parts[1]
-            if not _re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-                return (
-                    f"❌ Invalid name `{name}`.\n"
-                    "Names must start with a letter or underscore and contain only letters, digits, underscores."
-                )
-            value = parts[2]
-            description = " ".join(parts[3:]) if len(parts) > 3 else ""
-            vault.set(name, value, description=description, scope="global")
-            return (
-                f"✅ Credential `{name}` stored.\n"
-                f"⚠️ **Security notice:** This message contains your secret in plaintext. "
-                f"Please **delete this message immediately** from chat history. "
-                f"Using `hermes vault add {name}` via SSH is significantly safer."
-            )
-
-        elif subcmd in ("remove", "rm", "delete", "del"):
-            if len(parts) < 2:
-                return "Usage: `/vault remove NAME`"
-            name = parts[1]
-            if vault.delete(name, scope="global"):
-                return f"✅ Credential `{name}` removed from global vault."
-            if vault.delete(name, scope="project"):
-                return f"✅ Credential `{name}` removed from project vault."
-            return f"❌ Credential `{name}` not found."
-
-        else:
-            return (
-                "🔐 **Vault commands:**\n"
-                "• `/vault list` \u2014 list all credentials\n"
-                "• `/vault show NAME` \u2014 show masked value + placeholder\n"
-                "• `/vault add NAME VALUE [description]` \u2014 store a credential\n"
-                "• `/vault remove NAME` \u2014 delete a credential\n\n"
-                "⚠️ For `/vault add`, using `hermes vault add` via SSH is safer \u2014 "
-                "the value is never exposed in chat history."
-            )
+        return format_vault_command(parts)
 
     async def _handle_set_home_command(self, event: MessageEvent) -> str:
         """Handle /sethome command -- set the current chat as the platform's home channel."""

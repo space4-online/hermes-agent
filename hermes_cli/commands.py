@@ -171,8 +171,11 @@ COMMAND_REGISTRY: list[CommandDef] = [
                subcommands=("list", "ls", "show", "create", "assign", "link", "unlink",
                             "claim", "comment", "complete", "block", "unblock", "archive",
                             "tail", "dispatch", "context", "init", "gc")),
+    # Available in BOTH CLI and gateway surfaces.  The shared handler lives in
+    # ``hermes_cli/vault_shared.py`` and is dispatched from cli.HermesCLI
+    # (TUI / web chat / ACP) as well as gateway/run.py (messaging gateways).
     CommandDef("vault", "Manage credential vault (list / show / add / remove)",
-               "Tools & Skills", gateway_only=True,
+               "Tools & Skills",
                args_hint="[list|show|add|remove] [name] [value]",
                subcommands=("list", "ls", "show", "add", "remove", "rm")),
     CommandDef("reload", "Reload .env variables into the running session", "Tools & Skills",

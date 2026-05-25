@@ -7589,6 +7589,18 @@ class HermesCLI:
             self._handle_voice_command(cmd_original)
         elif canonical == "busy":
             self._handle_busy_command(cmd_original)
+        elif canonical == "vault":
+            # Shared with gateway/run.py — see hermes_cli/vault_shared.py.
+            # Available in TUI, web chat (via slash worker), and ACP.
+            from hermes_cli.vault_shared import (
+                format_vault_command,
+                parse_vault_args,
+            )
+            try:
+                output = format_vault_command(parse_vault_args(cmd_original))
+            except Exception as exc:
+                output = f"❌ Vault command failed: {exc}"
+            print(output)
         else:
             # Check for user-defined quick commands (bypass agent loop, no LLM call)
             base_cmd = cmd_lower.split()[0]

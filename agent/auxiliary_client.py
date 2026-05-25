@@ -3809,6 +3809,33 @@ def _resolve_task_provider_model(
         cfg_api_key = str(task_config.get("api_key", "")).strip() or None
         cfg_api_mode = str(task_config.get("api_mode", "")).strip() or None
 
+        # Drop unresolved ${VAR} placeholders that survived _expand_env_vars
+        # (i.e. the env var was not set). Treat as empty so env-var fallback
+        # below can kick in instead of forwarding a literal placeholder.
+        def _drop_placeholder(v):
+            if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
+                return None
+            return v
+
+        cfg_provider = _drop_placeholder(cfg_provider)
+        cfg_model = _drop_placeholder(cfg_model)
+        cfg_base_url = _drop_placeholder(cfg_base_url)
+        cfg_api_key = _drop_placeholder(cfg_api_key)
+        cfg_api_mode = _drop_placeholder(cfg_api_mode)
+
+        # Fallback to AUXILIARY_<TASK>_* env vars when config fields are empty.
+        # This rescues deployments where config.yaml has api_key: "" but the
+        # corresponding env var is set (e.g. via docker-compose / .env file).
+        _task_upper = task.upper()
+        if not cfg_provider:
+            cfg_provider = os.environ.get(f"AUXILIARY_{_task_upper}_PROVIDER", "").strip() or None
+        if not cfg_model:
+            cfg_model = os.environ.get(f"AUXILIARY_{_task_upper}_MODEL", "").strip() or None
+        if not cfg_base_url:
+            cfg_base_url = os.environ.get(f"AUXILIARY_{_task_upper}_BASE_URL", "").strip() or None
+        if not cfg_api_key:
+            cfg_api_key = os.environ.get(f"AUXILIARY_{_task_upper}_API_KEY", "").strip() or None
+
     resolved_model = model or cfg_model
     resolved_api_mode = cfg_api_mode
 

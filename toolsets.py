@@ -370,6 +370,8 @@ TOOLSETS = {
             "todo", "memory",
             # Session history search
             "session_search",
+            # Credential vault (list names/descriptions, get placeholder — LLM never sees values)
+            "list_credentials", "use_credential",
             # Code execution + delegation
             "execute_code", "delegate_task",
             # Cronjob management
