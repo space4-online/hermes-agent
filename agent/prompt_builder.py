@@ -838,7 +838,85 @@ def build_environment_hints() -> str:
 
     if is_wsl():
         hints.append(WSL_ENVIRONMENT_HINT)
+
+    oss_hint = _build_oss_profiles_hint()
+    if oss_hint:
+        hints.append(oss_hint)
+
     return "\n\n".join(hints)
+
+
+_OSS_REQUIRED_FIELDS = ("ENDPOINT", "BUCKET", "AK", "SK")
+
+
+def _collect_oss_credential_names() -> list[str]:
+    """Best-effort collection of OSS_* credential names (no values exposed).
+
+    Sources, merged & deduplicated:
+    1. Hermes vault (global ~/.hermes/vault.yaml + project .hermes-vault).
+       Read via VaultStore.list() which intentionally returns metadata only.
+    2. Process environment (covers CI / local debug where vault is bypassed).
+
+    Failures are swallowed: env hints must never break prompt building.
+    """
+    names: set[str] = set()
+    try:
+        from agent.vault import VaultStore  # local import to avoid cycles
+
+        for info in VaultStore().list():
+            if info.name.startswith("OSS_"):
+                names.add(info.name)
+    except Exception:
+        pass
+    for k in os.environ:
+        if k.startswith("OSS_"):
+            names.add(k)
+    return sorted(names)
+
+
+def _build_oss_profiles_hint() -> str | None:
+    """Tell the agent which Aliyun OSS profiles are configured (if any).
+
+    A profile <P> counts as 'available' iff all four of
+    OSS_<P>_{ENDPOINT,BUCKET,AK,SK} are present in the vault or env.
+    Profile names are surfaced; secret values are never read or emitted.
+    """
+    names = _collect_oss_credential_names()
+    if not names:
+        return None
+
+    fields_per_profile: dict[str, set[str]] = {}
+    for n in names:
+        parts = n.split("_")
+        if len(parts) < 3:
+            continue
+        profile = "_".join(parts[1:-1])
+        field = parts[-1]
+        fields_per_profile.setdefault(profile, set()).add(field)
+
+    ready = sorted(
+        p for p, fields in fields_per_profile.items()
+        if set(_OSS_REQUIRED_FIELDS) <= fields
+    )
+    if not ready:
+        return None
+
+    # Profile names are stored uppercase in vault (OSS_DEFAULT_*) but the
+    # skill CLI's load_profile() does a case-insensitive .upper() lookup,
+    # so display them lowercase for friendlier `--profile default` usage.
+    display = [p.lower() for p in ready]
+    profile_list = ", ".join(display)
+    return (
+        f"Aliyun OSS profiles available (vault-backed): {profile_list}. "
+        "Whenever you produce a deliverable (image, PDF, archive) that the "
+        "user needs to open, share, or hand to a chat channel "
+        "(DingTalk / WeChat / Feishu / browser), upload it via the "
+        "`aliyun-oss` skill (e.g. `python skills/integration/aliyun-oss/"
+        "scripts/oss_cli.py upload <local_path> --profile "
+        f"{display[0]}`) and present the returned URL to the user. Do NOT "
+        "hand out raw local paths in remote / containerised sessions — they "
+        "are unreachable from the user's device."
+    )
 
 
 CONTEXT_FILE_MAX_CHARS = 20_000
