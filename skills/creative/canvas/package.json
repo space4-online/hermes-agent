@@ -1,7 +1,7 @@
 {
   "name": "@hermes-skills/canvas",
   "version": "1.0.0",
-  "description": "Token-driven Canvas to SVG. AI writes .canvas.tsx, this CLI renders a static .svg.",
+  "description": "Token-driven Canvas to SVG/PNG. AI writes .canvas.tsx, this CLI renders a static .svg or .png (PNG via Chrome → resvg → rsvg-convert fallback chain).",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -13,10 +13,13 @@
     "canvas-render": "scripts/render.mjs"
   },
   "dependencies": {
-    "react": "^18.3.1",
     "@babel/core": "^7.25.2",
+    "@babel/preset-react": "^7.24.7",
     "@babel/preset-typescript": "^7.24.7",
-    "@babel/preset-react": "^7.24.7"
+    "react": "^18.3.1"
+  },
+  "optionalDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
   },
   "scripts": {
     "render": "node scripts/render.mjs",

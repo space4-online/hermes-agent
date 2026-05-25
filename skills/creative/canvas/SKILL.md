@@ -40,7 +40,21 @@ The primary output is **SVG** (vector, infinite zoom, embeddable in Markdown / H
 | DingTalk / WeChat / Feishu / Slack / Telegram image messages | **no**     | `.png` |
 | Mail clients, screenshots, slides        | mixed      | `.png` is safer |
 
-To emit PNG, give `-o` a `.png` filename (or pass `--format png`). PNG rasterization runs Chrome headless under the hood, so a Chrome / Chromium install is required; override the path with `CANVAS_CHROME_BIN=/path/to/chrome` if auto-detection misses it. PNG pixel dimensions equal the SVG `viewBox` exactly — no cropping.
+To emit PNG, give `-o` a `.png` filename (or pass `--format png`). PNG pixel dimensions equal the SVG `viewBox` exactly — no cropping. PNG rasterization tries three backends in order, automatically falling back if one is missing or fails:
+
+| # | Backend         | Cost / deps                                  | Use case                                          |
+|---|-----------------|----------------------------------------------|---------------------------------------------------|
+| 1 | `@resvg/resvg-js` | npm dep, ~6 MB, in-process, no system deps  | **Default**. Fast (~50ms), container-friendly.    |
+| 2 | Chrome headless | Chrome/Chromium binary on disk               | Fallback. Supports `<foreignObject>`, complex CSS.|
+| 3 | `rsvg-convert`  | `apt-get install librsvg2-bin`               | Last resort. Lightweight system binary.           |
+
+Set `CANVAS_PNG_BACKEND=resvg|chrome|rsvg-convert` to **force** one backend (skipping the fallback chain). For most uses leave it unset — the default order works.
+
+### PNG backend setup
+
+- **resvg (recommended)**: covered by `npm install` in this skill (declared in `optionalDependencies`). Pure Rust, no headless browser needed. Works out-of-the-box on every container.
+- **Chrome headless**: see *Chrome lookup order* below. The hermes-agent Docker image already installs Playwright Chromium, so this works without extra packages.
+- **rsvg-convert**: `apt-get install -y librsvg2-bin` (~3 MB).
 
 ### Chrome lookup order
 
@@ -229,5 +243,6 @@ pixel dimensions equal the SVG `viewBox` exactly (no square-thumbnail cropping).
 | `SyntaxError` in .canvas.tsx | Ensure file ends with `.canvas.tsx` or `.canvas.jsx`; renderer auto-detects via extension. |
 | Empty SVG | Check that the default export is a function returning JSX. The renderer ignores files without a default export. |
 | Wrong colors | Set `--theme dark` or `--theme light`; confirm token paths against `references/tokens-cheatsheet.md`. |
-| `PNG output requires Chrome/Chromium` | Install Google Chrome, or `export CANVAS_CHROME_BIN=/path/to/chrome`. In containers, ensure `PLAYWRIGHT_BROWSERS_PATH` points to a tree that contains `chromium_headless_shell-*/chrome-linux/headless_shell` (hermes-agent's Dockerfile already sets this up). |
+| `PNG output failed in all backends` | Either `npm install` inside this skill (gives you `@resvg/resvg-js`, which has no system deps), or install Chrome/Chromium and set `CANVAS_CHROME_BIN`, or `apt-get install -y librsvg2-bin` for `rsvg-convert`. The error message lists what each backend tried. |
+| `PNG output requires Chrome/Chromium` | Only seen when `CANVAS_PNG_BACKEND=chrome` is forced. Install Google Chrome, or `export CANVAS_CHROME_BIN=/path/to/chrome`. In containers, ensure `PLAYWRIGHT_BROWSERS_PATH` points to a tree that contains `chromium_headless_shell-*/chrome-linux/headless_shell` (hermes-agent's Dockerfile already sets this up). |
 | PNG looks cropped / square | You're looking at an old `qlmanage` thumbnail. Re-emit with `node scripts/render.mjs ... -o foo.png` — it always matches the SVG `viewBox` 1:1. |

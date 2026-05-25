@@ -196,10 +196,10 @@ async function main() {
   const wantSvg = format === "svg" || format === "both" || opts.keepSvg;
 
   if (wantPng) {
-    await svgFileToPng(svgOut, pngOut, { width, height });
+    const backend = await svgFileToPng(svgOut, pngOut, { width, height });
     const pstat = await fs.stat(pngOut);
     console.log(
-      `canvas: wrote ${pngOut} (${pstat.size} bytes, theme=${opts.theme}, ${width}x${height})`
+      `canvas: wrote ${pngOut} (${pstat.size} bytes, theme=${opts.theme}, ${width}x${height}, png-backend=${backend})`
     );
     if (!wantSvg) {
       await fs.unlink(svgOut).catch(() => {});
@@ -284,7 +284,77 @@ function findPlaywrightChromium(root) {
   return null;
 }
 
-async function svgFileToPng(svgPath, pngPath, { width, height }) {
+// -- PNG rasterization: 3-tier fallback ------------------------------------
+//   1. @resvg/resvg-js  (in-process, Rust, no system deps)
+//   2. Chrome headless  (matches viewBox 1:1, supports foreignObject)
+//   3. rsvg-convert     (system binary, GNOME's librsvg)
+//
+// Override order with CANVAS_PNG_BACKEND=resvg|chrome|rsvg-convert.
+// Each backend returns a label string on success, throws on failure.
+
+async function svgFileToPng(svgPath, pngPath, dims) {
+  await fs.mkdir(path.dirname(pngPath), { recursive: true });
+  const forced = (process.env.CANVAS_PNG_BACKEND || "").trim().toLowerCase();
+  const order = forced
+    ? [forced]
+    : ["resvg", "chrome", "rsvg-convert"];
+  const errs = [];
+  for (const backend of order) {
+    try {
+      if (backend === "resvg")        { await renderPngResvg(svgPath, pngPath, dims);   return "resvg"; }
+      if (backend === "chrome")       { await renderPngChrome(svgPath, pngPath, dims);  return "chrome"; }
+      if (backend === "rsvg-convert") { await renderPngRsvgConvert(svgPath, pngPath, dims); return "rsvg-convert"; }
+      throw new Error(`unknown backend '${backend}'`);
+    } catch (err) {
+      errs.push(`${backend}: ${err.message}`);
+      // try next backend
+    }
+  }
+  throw new Error(
+    `PNG output failed in all backends. Tried: ${order.join(", ")}.\n` +
+    errs.map(e => "  - " + e).join("\n") + "\n" +
+    "Hints:\n" +
+    "  - Run 'npm install @resvg/resvg-js' inside the canvas skill (in-process, no system deps).\n" +
+    "  - Or install Chrome/Chromium and set CANVAS_CHROME_BIN.\n" +
+    "  - Or 'apt-get install -y librsvg2-bin' to get rsvg-convert."
+  );
+}
+
+async function renderPngResvg(svgPath, pngPath, { width, height }) {
+  let mod;
+  try {
+    mod = await import("@resvg/resvg-js");
+  } catch (err) {
+    throw new Error(
+      `@resvg/resvg-js not installed (run 'npm install' in the canvas skill). ${err.code || err.message}`
+    );
+  }
+  const Resvg = mod.Resvg || (mod.default && mod.default.Resvg);
+  if (!Resvg) throw new Error("@resvg/resvg-js exports no Resvg class");
+  const svg = await fs.readFile(svgPath);
+  const r = new Resvg(svg, {
+    fitTo: { mode: "width", value: width },
+    background: "rgba(0,0,0,0)",
+  });
+  const pngBuf = r.render().asPng();
+  await fs.writeFile(pngPath, pngBuf);
+}
+
+async function renderPngRsvgConvert(svgPath, pngPath, { width, height }) {
+  const probe = spawnSync("which", ["rsvg-convert"], { encoding: "utf8" });
+  if (probe.status !== 0) {
+    throw new Error("rsvg-convert not found in PATH (apt-get install librsvg2-bin)");
+  }
+  const args = ["-w", String(width), "-h", String(height), "-f", "png", "-o", pngPath, svgPath];
+  const res = spawnSync("rsvg-convert", args, { encoding: "utf8" });
+  if (res.status !== 0 || !existsSync(pngPath)) {
+    throw new Error(
+      `rsvg-convert failed (exit ${res.status}). ${(res.stderr || "").trim() || "no stderr"}.`
+    );
+  }
+}
+
+async function renderPngChrome(svgPath, pngPath, { width, height }) {
   const chrome = findChrome();
   if (!chrome) {
     throw new Error(
