@@ -1,3 +1,11 @@
 node_modules/
 .canvas-tmp/
 *.log
+
+# Root .gitignore ignores all `examples/` globally; un-ignore ours since
+# the SKILL.md template-selection protocol requires the preview PNGs.
+!examples/
+!examples/**
+
+# Regression scratch outputs
+examples/_*
