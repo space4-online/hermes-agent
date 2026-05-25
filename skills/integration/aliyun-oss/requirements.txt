@@ -1,2 +1,7 @@
+# Auto-installed by scripts/_bootstrap.py on first invocation into
+# $HERMES_HOME/skill-deps/aliyun-oss/. Listed here for documentation,
+# manual `pip install -r` setups, and dependency scanners.
+#
+# PyYAML is omitted: it ships with hermes core (pyproject) and is always
+# importable inside the runtime venv.
 oss2>=2.18.0
-PyYAML>=6.0

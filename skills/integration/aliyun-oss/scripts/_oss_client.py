@@ -89,9 +89,13 @@ def _import_oss2():
         import oss2  # type: ignore[import-not-found]
         return oss2
     except ImportError as e:
+        # The CLI runs `_bootstrap.ensure_dependencies()` at startup, so
+        # reaching here means bootstrap was disabled (HERMES_OSS_NO_BOOTSTRAP=1)
+        # or could not write to the cache dir.
         raise OssConfigError(
-            "oss2 not installed. Run 'pip install -r requirements.txt' inside "
-            "the aliyun-oss skill folder. (" + str(e) + ")"
+            "oss2 not installed and bootstrap could not load it. "
+            "Unset HERMES_OSS_NO_BOOTSTRAP, or run "
+            "'pip install oss2' inside the hermes runtime. (" + str(e) + ")"
         )
 
 

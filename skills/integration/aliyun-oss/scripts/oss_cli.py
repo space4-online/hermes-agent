@@ -19,6 +19,34 @@ SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
+# Lazy-install missing third-party deps (oss2) on first invocation. Must
+# happen before _oss_client is imported because that module reaches into
+# oss2 lazily via _import_oss2() but we want all callers (including
+# `info` which doesn't need oss2 yet) to share one dependency-ready path.
+from _bootstrap import ensure_dependencies
+
+try:
+    ensure_dependencies()
+except Exception as _bootstrap_err:                              # pragma: no cover
+    # Surface as the standard JSON error envelope, matching the rest of
+    # the CLI's output contract, then exit non-zero.
+    print(
+        json.dumps(
+            {
+                "ok": False,
+                "error": f"dependency bootstrap failed: {_bootstrap_err}",
+                "hint": (
+                    "Set HERMES_OSS_NO_BOOTSTRAP=1 to skip auto-install "
+                    "and manage deps yourself, or pre-install with "
+                    "`pip install oss2`."
+                ),
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+    sys.exit(1)
+
 from _oss_client import (
     OssConfigError,
     delete,

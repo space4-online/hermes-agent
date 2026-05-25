@@ -120,16 +120,33 @@ Do **not** parse or reformat AK/SK from any error message — they should never 
 
 ## Setup (one-time)
 
+Dependencies are installed **automatically** the first time the CLI is
+invoked: `_bootstrap.py` detects a missing `oss2` and runs
+`pip install --target $HERMES_HOME/skill-deps/aliyun-oss oss2` (default
+`~/.hermes/skill-deps/aliyun-oss/`). The cache is bind-mounted with
+`~/.hermes`, so it survives container restarts and rebuilds — the
+install runs at most once per host.
+
+Ops only needs to configure credentials:
+
 ```bash
-cd "$HERMES_HOME/skills/integration/aliyun-oss"
-pip install -r requirements.txt   # oss2, pyyaml
-# Configure credentials:
 hermes vault add OSS_DEFAULT_ENDPOINT
 hermes vault add OSS_DEFAULT_BUCKET
 hermes vault add OSS_DEFAULT_AK
 hermes vault add OSS_DEFAULT_SK
-# Sanity check:
+# Sanity check (will trigger first-time bootstrap, ~30s):
 python scripts/oss_cli.py info
+```
+
+Escape hatches (env vars):
+- `HERMES_OSS_NO_BOOTSTRAP=1` — disable auto-install (use system-managed `oss2`)
+- `HERMES_OSS_DEPS_DIR=/some/path` — override the cache location
+
+Manual pre-install is still supported and skips the lazy bootstrap:
+
+```bash
+cd "$HERMES_HOME/skills/integration/aliyun-oss"
+pip install -r requirements.txt   # installs oss2 into the active env
 ```
 
 ## Troubleshooting
@@ -137,7 +154,8 @@ python scripts/oss_cli.py info
 | Symptom | Fix |
 |---|---|
 | `vault entries not found: OSS_DEFAULT_*` | Run `hermes vault list` to confirm names exist; re-add with `hermes vault add OSS_<PROFILE>_<KEY>`. |
-| `oss2 not installed` | `pip install -r requirements.txt` inside this skill folder. |
+| `dependency bootstrap failed: pip install failed` | Check container network egress to PyPI / your mirror. Set `PIP_INDEX_URL` env or pre-install `oss2` manually. |
+| `oss2 not installed and bootstrap could not load it` | Cache dir not writable. Inspect `$HERMES_HOME/skill-deps/aliyun-oss/`; ensure the runtime user owns `$HERMES_HOME`. |
 | `403 SignatureDoesNotMatch` | AK/SK wrong, or system clock drift > 15min. Check `date -u`. |
 | `403 AccessDenied` on `--public` URL | The bucket / object ACL is private. Either set `bucket.acl=public-read` (Aliyun console) or drop `--public` to use a pre-signed URL. |
 | URL works in browser but not in DingTalk | DingTalk requires `https://` and ContentType image/*. Ensure object's MIME was inferred correctly (the CLI sets it from extension). |
