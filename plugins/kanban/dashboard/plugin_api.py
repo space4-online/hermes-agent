@@ -61,14 +61,23 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 def _check_ws_token(provided: Optional[str]) -> bool:
-    """Constant-time compare against the dashboard session token.
+    """Constant-time compare against the dashboard session token or API_SERVER_KEY.
 
     Imported lazily so the plugin still loads in test contexts where the
     dashboard web_server module isn't importable (e.g. the bare-FastAPI
     test harness).
+
+    Also accepts API_SERVER_KEY so that external services (e.g. codeshark
+    backend) can subscribe to kanban WebSocket events.
     """
     if not provided:
         return False
+
+    # Check API_SERVER_KEY first (external service auth)
+    api_server_key = os.getenv("API_SERVER_KEY", "")
+    if api_server_key and hmac.compare_digest(str(provided), api_server_key):
+        return True
+
     try:
         from hermes_cli import web_server as _ws
     except Exception:
@@ -1610,3 +1619,102 @@ async def stream_events(ws: WebSocket):
             await ws.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Profile Management API (for CodeShark workspace backend)
+# ---------------------------------------------------------------------------
+
+class ProfileUpsertBody(BaseModel):
+    """Request body for creating/updating a profile."""
+    name: str = Field(..., description="Profile name (lowercase alphanumeric + hyphens)")
+    soul_md: Optional[str] = Field(None, description="SOUL.md content for the profile")
+    skills: list[str] = Field(default_factory=list, description="List of skill names to enable")
+
+
+@router.get("/profiles/{profile_name}")
+def get_profile(profile_name: str):
+    """Get profile information."""
+    try:
+        from hermes_cli.profiles import get_profile_dir, profile_exists
+    except ImportError:
+        raise HTTPException(status_code=501, detail="profiles module not available")
+
+    if not profile_exists(profile_name):
+        raise HTTPException(status_code=404, detail=f"Profile '{profile_name}' not found")
+
+    profile_dir = get_profile_dir(profile_name)
+    soul_path = profile_dir / "SOUL.md"
+    config_path = profile_dir / "config.yaml"
+
+    result = {
+        "name": profile_name,
+        "exists": True,
+        "soul_md": soul_path.read_text() if soul_path.exists() else None,
+        "has_config": config_path.exists(),
+    }
+
+    # Read skills from config if available
+    if config_path.exists():
+        try:
+            import yaml as _yaml
+            with open(config_path) as f:
+                cfg = _yaml.safe_load(f) or {}
+            result["skills"] = cfg.get("skills", [])
+        except Exception:
+            result["skills"] = []
+    else:
+        result["skills"] = []
+
+    return result
+
+
+@router.put("/profiles/{profile_name}")
+def upsert_profile(profile_name: str, payload: ProfileUpsertBody):
+    """Create or update a profile (SOUL.md + skills config)."""
+    try:
+        from hermes_cli.profiles import (
+            get_profile_dir,
+            profile_exists,
+            create_profile,
+            normalize_profile_name,
+        )
+    except ImportError:
+        raise HTTPException(status_code=501, detail="profiles module not available")
+
+    canon = normalize_profile_name(profile_name)
+
+    # Create profile if it doesn't exist
+    if not profile_exists(canon):
+        try:
+            create_profile(canon)
+            log.info("Created new profile via API: %s", canon)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to create profile: {exc}")
+
+    profile_dir = get_profile_dir(canon)
+
+    # Update SOUL.md
+    if payload.soul_md is not None:
+        soul_path = profile_dir / "SOUL.md"
+        soul_path.write_text(payload.soul_md, encoding="utf-8")
+        log.info("Updated SOUL.md for profile %s (%d chars)", canon, len(payload.soul_md))
+
+    # Update skills in config.yaml
+    if payload.skills:
+        config_path = profile_dir / "config.yaml"
+        try:
+            import yaml as _yaml
+            cfg = {}
+            if config_path.exists():
+                with open(config_path) as f:
+                    cfg = _yaml.safe_load(f) or {}
+            cfg["skills"] = payload.skills
+            with open(config_path, "w") as f:
+                _yaml.dump(cfg, f, default_flow_style=False)
+            log.info("Updated skills for profile %s: %s", canon, payload.skills)
+        except Exception as exc:
+            log.warning("Failed to update skills config for %s: %s", canon, exc)
+
+    return {"ok": True, "profile": canon, "message": "Profile synced successfully"}
+

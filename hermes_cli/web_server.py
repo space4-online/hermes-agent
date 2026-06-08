@@ -130,6 +130,9 @@ def _has_valid_session_token(request: Request) -> bool:
     already use ``Authorization`` (for example Caddy ``basic_auth``). We still
     accept the legacy Bearer path for backward compatibility with older
     dashboard bundles.
+
+    Also accepts API_SERVER_KEY (env-based) so that external services (e.g.
+    codeshark backend) can call plugin APIs without the ephemeral session token.
     """
     session_header = request.headers.get(_SESSION_HEADER_NAME, "")
     if session_header and hmac.compare_digest(
@@ -140,7 +143,17 @@ def _has_valid_session_token(request: Request) -> bool:
 
     auth = request.headers.get("authorization", "")
     expected = f"Bearer {_SESSION_TOKEN}"
-    return hmac.compare_digest(auth.encode(), expected.encode())
+    if hmac.compare_digest(auth.encode(), expected.encode()):
+        return True
+
+    # Accept API_SERVER_KEY as alternative credential for external callers
+    api_server_key = os.getenv("API_SERVER_KEY", "")
+    if api_server_key and auth:
+        expected_api = f"Bearer {api_server_key}"
+        if hmac.compare_digest(auth.encode(), expected_api.encode()):
+            return True
+
+    return False
 
 
 def _require_token(request: Request) -> None:
