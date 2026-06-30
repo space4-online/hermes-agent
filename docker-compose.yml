@@ -184,13 +184,14 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/docker-entrypoint.d:/docker-entrypoint.d:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/letsencrypt:/var/www/letsencrypt:ro
     environment:
       - HERMES_DOMAIN=${HERMES_DOMAIN:-agent-h.codeshark.cn}
       - HERMES_PORT=${HERMES_PORT:-8642}
-    # 移除官方镜像自带的 default.conf（避免与模板生成的 hermes.conf 冲突），然后启动 nginx
-    command: ["/bin/sh", "-c", "rm -f /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
+    # 使用 nginx 原生命令以触发官方 entrypoint 的模板处理逻辑
+    command: ["nginx", "-g", "daemon off;"]
     ulimits:
       nofile:
         soft: 65536
