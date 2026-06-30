@@ -184,7 +184,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/templates:/etc/nginx/templates:ro
-      - ./nginx/docker-entrypoint.d:/docker-entrypoint.d:ro
+      - ./nginx/docker-entrypoint.d/00-remove-default.sh:/docker-entrypoint.d/00-remove-default.sh:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/letsencrypt:/var/www/letsencrypt:ro
     environment:
