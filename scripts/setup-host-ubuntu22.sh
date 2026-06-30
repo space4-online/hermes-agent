@@ -327,6 +327,14 @@ server {
     location / {
         proxy_pass http://127.0.0.1:${HERMES_PORT};
     }
+
+    # CodesharkAdapter 反代（Platform Adapter 通道入口）
+    # 后端推送路径: https://agent-h.codeshark.cn/adapter/incoming
+    location /adapter/ {
+        proxy_pass http://127.0.0.1:8645/;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
 }
 EOF
     sudo nginx -t && sudo systemctl reload nginx

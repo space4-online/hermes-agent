@@ -5345,6 +5345,13 @@ class GatewayRunner:
                 return None
             return YuanbaoAdapter(config)
 
+        elif platform == Platform.CODESHARK:
+            from gateway.platforms.codeshark import CodesharkAdapter, AIOHTTP_AVAILABLE
+            if not AIOHTTP_AVAILABLE:
+                logger.warning("Codeshark: aiohttp not installed")
+                return None
+            return CodesharkAdapter(config)
+
         return None
     def _is_user_authorized(self, source: SessionSource) -> bool:
         """
@@ -5362,7 +5369,7 @@ class GatewayRunner:
         # connection, so HA events are always authorized.
         # Webhook events are authenticated via HMAC signature validation in
         # the adapter itself — no user allowlist applies.
-        if source.platform in {Platform.HOMEASSISTANT, Platform.WEBHOOK}:
+        if source.platform in {Platform.HOMEASSISTANT, Platform.WEBHOOK, Platform.CODESHARK}:
             return True
 
         user_id = source.user_id

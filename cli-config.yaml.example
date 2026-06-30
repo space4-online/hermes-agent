@@ -721,6 +721,18 @@ platform_toolsets:
 #     # allowed_chats: ["-1001234567890"]
 #     extra:
 #       disable_link_previews: false  # Set true to suppress Telegram URL previews in bot messages
+#
+platforms:
+  codeshark:
+    extra:
+      host: "127.0.0.1"         # Adapter listen host
+      port: 8645                # Adapter listen port
+      secret: "${CODESHARK_ADAPTER_SECRET:911f2af927be0b3a2a70c4700b9430877118826230b34b36194ebc97faefb2f5}"  # HMAC signing secret
+      bot_api_url: "https://dev.codeshark.cn/api"  # Backend Bot API base URL (预发环境公网域名)
+      bot_api_key: "${API_SERVER_KEY}"            # X-Bot-Api-Key for Bot API auth
+    session_reset:
+      mode: idle
+      idle_minutes: 30          # Reset session after 30min of inactivity
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Available toolsets (use these names in platform_toolsets or the toolsets list)

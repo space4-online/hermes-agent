@@ -109,6 +109,7 @@ class Platform(Enum):
     BLUEBUBBLES = "bluebubbles"
     QQBOT = "qqbot"
     YUANBAO = "yuanbao"
+    CODESHARK = "codeshark"
     @classmethod
     def _missing_(cls, value):
         """Accept unknown platform names only for known plugin adapters.
