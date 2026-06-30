@@ -85,6 +85,29 @@ class CodesharkAdapter(BasePlatformAdapter):
         self._dedup_cache: Dict[str, float] = {}
 
     # ────────────────────────────────────────────────────────────
+    # Source building
+    # ────────────────────────────────────────────────────────────
+
+    def _build_source(
+        self,
+        chat_id: str,
+        chat_name: Optional[str] = None,
+        chat_type: str = "dm",
+        user_id: Optional[str] = None,
+        user_name: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ):
+        """构建 SessionSource 用于 session 路由和上下文管理。"""
+        return self.build_source(
+            chat_id=chat_id,
+            chat_name=chat_name,
+            chat_type=chat_type,
+            user_id=user_id,
+            user_name=user_name,
+            message_id=message_id,
+        )
+
+    # ────────────────────────────────────────────────────────────
     # Lifecycle
     # ────────────────────────────────────────────────────────────
 
