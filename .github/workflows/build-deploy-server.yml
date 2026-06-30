@@ -122,6 +122,11 @@ jobs:
             # dashboard 共享同一镜像和挂载卷，必须一同重建以确保 UID 重映射和新代码生效
             docker compose -f docker-compose.yml up -d --force-recreate gateway dashboard
 
+            echo "==> docker compose up -d nginx"
+            # nginx 使用官方 nginx:alpine 镜像（无需构建），配置通过 volume 挂载
+            # 依赖 gateway 就绪后才启动
+            docker compose -f docker-compose.yml up -d nginx
+
             echo "==> Running database migrations"
             # 等待 gateway 容器就绪后执行 schema 迁移（幂等，无待处理则秒完成）
             sleep 5
@@ -136,8 +141,16 @@ jobs:
               if curl -fsS -o /dev/null http://127.0.0.1:8642/v1/models -H "Authorization: Bearer ${API_SERVER_KEY:-dummy}" 2>/dev/null \
                  || curl -fsS -o /dev/null http://127.0.0.1:8642/health 2>/dev/null; then
                 echo "API server is up."
-                exit 0
+                break
               fi
               sleep 2
             done
-            echo "WARN: API server health check timed out, please check 'docker logs hermes'"
+
+            echo "==> Verifying nginx HTTPS proxy"
+            # 通过本地 443 验证 nginx 反代是否正常（仅当证书存在时）
+            if curl -fsS -o /dev/null -k https://127.0.0.1/health 2>/dev/null; then
+              echo "nginx HTTPS proxy is up."
+            else
+              echo "WARN: nginx HTTPS check failed, checking container status..."
+              docker logs hermes-nginx --tail 20
+            fi

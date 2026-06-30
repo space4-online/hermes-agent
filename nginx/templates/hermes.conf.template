@@ -1,0 +1,89 @@
+#
+# Hermes Agent — nginx 反向代理配置
+#
+# 本文件由 docker-compose 管理，容器启动时 nginx 官方 entrypoint
+# 会自动执行 envsubst 将 ${HERMES_DOMAIN} / ${HERMES_PORT} 展开。
+#
+
+server {
+    listen 80;
+    server_name ${HERMES_DOMAIN};
+
+    # ACME http-01 challenge（certbot webroot 模式）
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    # 其余请求一律重定向到 HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${HERMES_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${HERMES_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${HERMES_DOMAIN}/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # SSL session 缓存
+    ssl_session_cache    shared:SSL:10m;
+    ssl_session_timeout  10m;
+
+    # --- SSE 反代优化 ---
+    # 关闭缓冲和缓存，确保事件实时推送到客户端
+    proxy_buffering off;
+    proxy_cache off;
+
+    # HTTP/1.1 长连接（SSE 依赖）
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    # 超时对齐 codeshark 后端 readTimeout 600s
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    # 透传请求头
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # 上传限制
+    client_max_body_size 50m;
+
+    # --- 路由 ---
+
+    # 主入口 → hermes gateway API Server
+    location / {
+        proxy_pass http://127.0.0.1:${HERMES_PORT};
+    }
+
+    # CodesharkAdapter 反代（Platform Adapter 通道入口）
+    # 后端推送路径: https://agent-h.codeshark.cn/adapter/incoming
+    location /adapter/ {
+        proxy_pass http://127.0.0.1:8645/;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+
+    # Dashboard 插件 API
+    location /api/plugins/ {
+        proxy_pass http://127.0.0.1:9119;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    # 健康检查（无需鉴权）
+    location /health {
+        proxy_pass http://127.0.0.1:${HERMES_PORT};
+        proxy_read_timeout 10s;
+        proxy_send_timeout 10s;
+    }
+}

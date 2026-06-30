@@ -250,31 +250,23 @@ if [ "${SWAP_SIZE_GB}" -gt 0 ] && [ ! -f /swapfile ]; then
   fi
 fi
 
-# ---------- 8. HTTPS 反代（Nginx + certbot，仅在传入 HERMES_DOMAIN 时启用）----------
+# ---------- 8. HTTPS 证书（certbot webroot；nginx 以容器运行，由 docker-compose 管理）----------
 if [ "$ENABLE_HTTPS" = "1" ]; then
-  log "启用 HTTPS 反代：$HERMES_DOMAIN"
-  sudo apt-get install -y nginx certbot python3-certbot-nginx
+  log "准备 HTTPS 证书（nginx 将以容器运行，此处仅安装 certbot 管理证书）"
+  sudo apt-get install -y certbot
 
   # webroot 目录供 ACME challenge 使用
   sudo mkdir -p /var/www/letsencrypt
-  sudo chown -R www-data:www-data /var/www/letsencrypt
 
   CERT_DIR="/etc/letsencrypt/live/${HERMES_DOMAIN}"
 
-  # ---- 阶段 1：如证书不存在，先写临时 80 站点 + webroot 拿证书 ----
+  # ---- 如证书不存在，使用临时 HTTP 服务器 + webroot 拿证书 ----
   if ! sudo test -f "${CERT_DIR}/fullchain.pem"; then
-    log "写临时 nginx 站点（仅 80）用于 ACME challenge"
-    sudo tee /etc/nginx/sites-available/hermes >/dev/null <<EOF
-server {
-    listen 80;
-    server_name ${HERMES_DOMAIN};
-    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
-    location / { return 404; }
-}
-EOF
-    sudo ln -sf /etc/nginx/sites-available/hermes /etc/nginx/sites-enabled/hermes
-    sudo rm -f /etc/nginx/sites-enabled/default
-    sudo nginx -t && sudo systemctl reload nginx
+    log "启动临时 HTTP 服务器（端口 80）用于 ACME challenge"
+    sudo mkdir -p /var/www/letsencrypt/.well-known/acme-challenge
+    sudo python3 -m http.server 80 --directory /var/www/letsencrypt &
+    TEMP_HTTP_PID=$!
+    sleep 1
 
     log "使用 certbot webroot 申请 Let's Encrypt 证书（需 DNS 已解析到本机）"
     if ! sudo certbot certonly --webroot -w /var/www/letsencrypt \
@@ -282,64 +274,36 @@ EOF
       warn "certbot 签发失败，请排查后手动跑："
       warn "  sudo certbot certonly --webroot -w /var/www/letsencrypt -d $HERMES_DOMAIN -m $CERTBOT_EMAIL --agree-tos"
     fi
+
+    sudo kill $TEMP_HTTP_PID 2>/dev/null || true
   else
     log "证书已存在：${CERT_DIR}/fullchain.pem"
   fi
 
-  # ---- 阶段 2：写完整反代配置（443 SSE + 80 重定向）----
-  if sudo test -f "${CERT_DIR}/fullchain.pem"; then
-    log "写完整 nginx 反代配置（SSE 适配）"
-    sudo tee /etc/nginx/sites-available/hermes >/dev/null <<EOF
-server {
-    listen 80;
-    server_name ${HERMES_DOMAIN};
-    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
-    location / { return 301 https://\$host\$request_uri; }
-}
+  # ---- certbot deploy hook：证书续期后 reload nginx 容器 ----
+  sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+  sudo tee /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh >/dev/null <<'DEPLOYHOOK'
+#!/bin/bash
+# certbot 续期后热加载 nginx 容器（避免重启中断长连接）
+if docker ps --filter "name=hermes-nginx" --format "{{.Names}}" | grep -q hermes-nginx; then
+  docker exec hermes-nginx nginx -s reload 2>/dev/null || true
+fi
+DEPLOYHOOK
+  sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh
+  log "certbot deploy hook 已安装：续期后自动 reload nginx 容器"
 
-server {
-    listen 443 ssl http2;
-    server_name ${HERMES_DOMAIN};
-
-    ssl_certificate     ${CERT_DIR}/fullchain.pem;
-    ssl_certificate_key ${CERT_DIR}/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    # SSE 必需：关闭缓存与代理缓冲，保持 keep-alive
-    proxy_buffering off;
-    proxy_cache off;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-
-    # SSE 长连接超时（与 codeshark 后端 readTimeout 600s 对齐）
-    proxy_read_timeout 600s;
-    proxy_send_timeout 600s;
-
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-
-    client_max_body_size 50m;
-
-    location / {
-        proxy_pass http://127.0.0.1:${HERMES_PORT};
-    }
-
-    # CodesharkAdapter 反代（Platform Adapter 通道入口）
-    # 后端推送路径: https://agent-h.codeshark.cn/adapter/incoming
-    location /adapter/ {
-        proxy_pass http://127.0.0.1:8645/;
-        proxy_read_timeout 30s;
-        proxy_send_timeout 30s;
-    }
-}
-EOF
-    sudo nginx -t && sudo systemctl reload nginx
-    log "HTTPS 反代就绪：https://${HERMES_DOMAIN}/v1/chat/completions"
+  # 确保 renewal 配置使用 webroot 认证器（兼容 standalone 首次签发后迁移的场景）
+  RENEWAL_CONF="/etc/letsencrypt/renewal/${HERMES_DOMAIN}.conf"
+  if [ -f "$RENEWAL_CONF" ] && grep -q 'authenticator = standalone' "$RENEWAL_CONF" 2>/dev/null; then
+    log "将 renewal 认证器从 standalone 切换为 webroot"
+    sudo sed -i 's/authenticator = standalone/authenticator = webroot/' "$RENEWAL_CONF"
+    if ! grep -q '\[webroot_map\]' "$RENEWAL_CONF" 2>/dev/null; then
+      echo -e "\n[webroot_map]\n${HERMES_DOMAIN} = /var/www/letsencrypt" | sudo tee -a "$RENEWAL_CONF" >/dev/null
+    fi
   fi
+
+  log "HTTPS 证书就绪，nginx 容器将在 docker compose up 时启动"
+  log "  → nginx 配置文件位于仓库 nginx/ 目录，由 docker-compose 管理"
 fi
 
 # ---------- 9. 防火墙（ufw，HTTPS 模式下仅放行 80/443，依靠 API_SERVER_KEY 鉴权）----------
@@ -402,6 +366,7 @@ log "MySQL 数据目录: $MYSQL_DATA_DIR"
 log "API 端口:     $HERMES_PORT"
 if [ "$ENABLE_HTTPS" = "1" ]; then
   log "HTTPS 入口:    https://${HERMES_DOMAIN}"
+  log "  → nginx 反代以容器运行（docker compose nginx service）"
   log "  → codeshark 后端 HERMES_BASE_URL=https://${HERMES_DOMAIN}"
 else
   log "HTTPS:        未启用（未传入 HERMES_DOMAIN）"
