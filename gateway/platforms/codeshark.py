@@ -258,6 +258,12 @@ class CodesharkAdapter(BasePlatformAdapter):
     # Send (reply to backend via Bot API)
     # ────────────────────────────────────────────────────────────
 
+    # ── 合法的 messageType 白名单 ──
+    _VALID_MESSAGE_TYPES = frozenset({
+        "TEXT", "FILE", "ERROR", "TASK_EVENT",
+        "AGENT_PROGRESS", "SYSTEM_NOTICE", "CARD",
+    })
+
     async def send(
         self,
         chat_id: str,
@@ -268,6 +274,12 @@ class CodesharkAdapter(BasePlatformAdapter):
         """通过 Bot API 发送回复消息到后端。
 
         chat_id 格式: "codeshark:{workspace_id}"
+
+        metadata 约定（统一格式协议）：
+          - message_type: 从 metadata 中提取，默认为 "TEXT"
+          - content_format: "markdown"（Hermes 默认）| "plain" | "json" | "card"
+          - card_type: CARD 消息的卡片类型（status/task/analysis/result）
+          - 其他字段：透传给前端对应渲染组件
         """
         if not self._bot_api_url:
             logger.warning("[Codeshark] bot_api_url not configured, cannot send reply")
@@ -277,11 +289,38 @@ class CodesharkAdapter(BasePlatformAdapter):
             # 解析 workspace_id
             workspace_id = chat_id.split(":", 1)[-1] if ":" in chat_id else chat_id
 
+            # ── 从 metadata 中提取 message_type ──
+            out_meta = dict(metadata) if metadata else {}
+
+            message_type = out_meta.pop("message_type", "TEXT")
+            if message_type not in self._VALID_MESSAGE_TYPES:
+                logger.warning(
+                    "[Codeshark] Unknown message_type=%s, fallback to TEXT",
+                    message_type,
+                )
+                message_type = "TEXT"
+
+            # ── 设置默认 content_format ──
+            if "content_format" not in out_meta:
+                if message_type == "CARD":
+                    out_meta["content_format"] = "card"
+                else:
+                    out_meta["content_format"] = "markdown"
+
+            # ── CARD 类型校验：必须有 card_type ──
+            if message_type == "CARD" and "card_type" not in out_meta:
+                logger.warning(
+                    "[Codeshark] CARD message missing card_type, fallback to TEXT"
+                )
+                message_type = "TEXT"
+                out_meta["content_format"] = "markdown"
+
             payload = {
                 "senderType": "HERMES",
                 "senderId": "hermes",
                 "content": content,
-                "messageType": "TEXT",
+                "messageType": message_type,
+                "metadata": json.dumps(out_meta, ensure_ascii=False) if out_meta else None,
             }
             if reply_to:
                 try:
@@ -300,7 +339,11 @@ class CodesharkAdapter(BasePlatformAdapter):
                     if resp.status == 200:
                         data = await resp.json()
                         msg_id = str(data.get("data", {}).get("id", ""))
-                        logger.info("[Codeshark] Reply sent | wid=%s msgId=%s", workspace_id, msg_id)
+                        logger.info(
+                            "[Codeshark] Reply sent | wid=%s msgId=%s type=%s fmt=%s",
+                            workspace_id, msg_id, message_type,
+                            out_meta.get("content_format", "-"),
+                        )
                         return SendResult(success=True, message_id=msg_id)
                     else:
                         body = await resp.text()
