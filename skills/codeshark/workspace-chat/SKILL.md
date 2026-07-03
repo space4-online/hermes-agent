@@ -132,3 +132,40 @@ metadata:
 - 所有 workspace 成员都能看到你的回复
 - 避免输出敏感信息（密钥、密码等）
 - 单条回复建议控制在 2000 字符以内
+
+## 工作区文件规范
+
+当你使用 `write_file` 工具生成文件时，必须遵循以下目录规范：
+
+### 标准工作目录
+
+所有文件必须写入以下路径：
+
+```
+/opt/data/workspace/{workspace_id}/
+```
+
+**规则**：
+1. **禁止写入 `/opt/data/` 根目录** — 所有生成的文件必须放在 `workspace/{workspace_id}/` 子目录下
+2. **按类型分子目录**（建议）：
+   - `analysis/` — 代码分析报告
+   - `generated/` — 自动生成的代码 / 文档
+   - `reports/` — 报告类输出
+   - `temp/` — 临时文件
+3. **文件命名**：使用有意义的英文名 + 扩展名，如 `user-service-analysis.md`
+4. **workspace_id** 从当前对话上下文中获取（系统会在会话初始化时告知）
+
+### 文件存储说明
+
+- **所有文件仅存在于容器本地** — 不会自动上传到 OSS 或对象存储
+- 生成文件后，在回复中使用 Markdown 展示关键内容，前端会渲染
+- 如需将文件持久化到 workspace，使用 FILE 消息类型附带文件元信息（由平台后续实现文件共享通道）
+
+### 示例
+
+```
+✅ 正确: /opt/data/workspace/1/generated/test.md
+✅ 正确: /opt/data/workspace/1/analysis/UserService-review.md
+❌ 错误: /opt/data/test.md
+❌ 错误: /tmp/output.html
+```
