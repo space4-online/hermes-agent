@@ -155,11 +155,49 @@ metadata:
 3. **文件命名**：使用有意义的英文名 + 扩展名，如 `user-service-analysis.md`
 4. **workspace_id** 从当前对话上下文中获取（系统会在会话初始化时告知）
 
+### 文件同步流程（与 OSS 双向同步）
+
+Workspace 文件现在自动与 OSS 双向同步。**每次任务必须遵循以下流程：**
+
+#### 1. 启动同步（必须首先执行）
+
+每次开始 workspace 任务时，先拉取 OSS 已有文件到本地：
+
+```bash
+python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py init --workspace-id {workspace_id}
+```
+
+这会从 OSS 下载所有已有文件到 `/opt/data/workspace/{workspace_id}/`。
+
+#### 2. 写入后同步（每次 write_file 后立即执行）
+
+使用 write_file 创建或修改文件后，立即上传到 OSS：
+
+```bash
+python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py push --workspace-id {workspace_id} --path {relative_path}
+```
+
+**不要跳过这一步** — 否则文件仅存在于容器本地，容器重启后丢失。
+
+#### 3. 状态检查
+
+不确定时检查同步状态：
+
+```bash
+python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py status --workspace-id {workspace_id}
+```
+
+#### 重要规则
+
+1. 不要跳过 init — 否则可能覆盖队友已推送到 OSS 的文件
+2. push 失败时重试一次，仍失败则告知用户
+3. 路径参数必须用相对路径（如 `analysis/report.md`），不要包含绝对路径前缀
+4. 工作区文件持久化到 OSS，容器重启不会丢失
+
 ### 文件存储说明
 
-- **所有文件仅存在于容器本地** — 不会自动上传到 OSS 或对象存储
+- 文件写入后会自动通过 OSS 同步持久化
 - 生成文件后，在回复中使用 Markdown 展示关键内容，前端会渲染
-- 如需将文件持久化到 workspace，使用 FILE 消息类型附带文件元信息（由平台后续实现文件共享通道）
 
 ### 示例
 
