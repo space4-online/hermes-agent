@@ -236,6 +236,11 @@ class CodesharkAdapter(BasePlatformAdapter):
                 f"Your working directory is {workspace_dir}/. "
                 f"All file operations (write_file, patch, terminal) must use this directory. "
                 f"Never write files outside {workspace_dir}/.\n\n"
+                f"### Output Rules\n"
+                f"Use ONLY plain ASCII characters in tool call XML. "
+                f'Use straight double quotes (") not curly quotes. '
+                f'Use two hyphens (--) not em/en dashes. '
+                f"Your output is rendered as plain text — typographic characters break XML parsing.\n\n"
                 f"### File Sync Protocol\n"
                 f"1. On session start, run: "
                 f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py init --workspace-id {workspace_id}\n"
