@@ -307,9 +307,8 @@ class CodesharkAdapter(BasePlatformAdapter):
             # 解析 workspace_id
             workspace_id = chat_id.split(":", 1)[-1] if ":" in chat_id else chat_id
 
-            # ── 过滤内部推理块 + 强制 ASCII ──
-            content = self._strip_internal_blocks(content)
-            content = self._normalize_ascii(content)
+            # ── 平台消息格式化（一站式：去内部块 + 转 ASCII）──
+            content = self._format_for_platform(content)
 
             # ── 从 metadata 中提取 message_type ──
             out_meta = dict(metadata) if metadata else {}
@@ -400,43 +399,46 @@ class CodesharkAdapter(BasePlatformAdapter):
     # ────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _normalize_ascii(text: str) -> str:
-        """Replace typographic characters with ASCII equivalents.
+    def _format_for_platform(text: str) -> str:
+        """Post-process agent output before delivering to the Codeshark frontend.
 
-        AI models tend to output smart quotes and dashes even when
-        instructed not to.  This is a belt-and-suspenders fix: the
-        channel_prompt asks for ASCII, and we also enforce it here.
-        """
-        if not text:
-            return text
-        return (
-            text
-            .replace("“", '"')   # left double quote  → "
-            .replace("”", '"')   # right double quote → "
-            .replace("‘", "'")   # left single quote  → '
-            .replace("’", "'")   # right single quote → '
-            .replace("–", "--")  # en dash            → --
-            .replace("—", "---") # em dash            → ---
-            .replace("…", "...") # ellipsis           → ...
-        )
+        This is the single place where all platform-specific formatting lives.
+        The agent's internal processing (channel_prompt) stays clean — all
+        message scrubbing happens here, at the adapter boundary.
 
-    @staticmethod
-    def _strip_internal_blocks(text: str) -> str:
-        """Remove agent internal thinking/tool-call blocks from user-facing reply.
-
-        Stripped content:
-          - <invoke ...>...</invoke> blocks (raw text, not HTML tags)
-          - <tool_calls> / </tool_calls> wrapper lines
-          - Consecutive blank lines collapsed
+        Operations (in order):
+          1. Strip agent internal blocks (reasoning, tool-call XML)
+          2. Replace typographic characters with ASCII
+          3. Collapse blank lines
         """
         if not text:
             return text
         import re
-        # Remove <invoke ...>...</invoke> blocks
+
+        # ── 1. Strip agent internal blocks ──
+        # Tool calls: <tool_calls>...<invoke name="...">...</invoke>...</tool_calls>
+        text = re.sub(
+            r"<tool_calls>\s*(?:<invoke[^>]*>.*?</invoke>\s*)*</tool_calls>",
+            "", text, flags=re.DOTALL,
+        )
+        # Standalone invoke blocks (without tool_calls wrapper)
         text = re.sub(r"<invoke[^>]*>.*?</invoke>", "", text, flags=re.DOTALL)
-        # Remove orphan tool_calls wrapper tags
-        text = re.sub(r"^[ \t]*</?tool_calls>[ \t]*$", "", text, flags=re.MULTILINE)
-        # Collapse 3+ blank lines to 2
+        # Reasoning header: "💭 Reasoning:" through the next blank line or tool block
+        text = re.sub(r"💭\s*Reasoning:.*?(?=\n\n|\n(?:<tool_calls>|<invoke)|$)", "", text, flags=re.DOTALL)
+
+        # ── 2. Replace typographic characters with ASCII ──
+        for typo, ascii in [
+            ("“", '"'),   # " → "
+            ("”", '"'),   # " → "
+            ("‘", "'"),   # ' → '
+            ("’", "'"),   # ' → '
+            ("–", "--"),  # – → --
+            ("—", "---"), # — → ---
+            ("…", "..."), # … → ...
+        ]:
+            text = text.replace(typo, ascii)
+
+        # ── 3. Clean up whitespace ──
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
