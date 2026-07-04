@@ -311,6 +311,9 @@ class CodesharkAdapter(BasePlatformAdapter):
             # 解析 workspace_id
             workspace_id = chat_id.split(":", 1)[-1] if ":" in chat_id else chat_id
 
+            # ── 强制替换排版字符为 ASCII（AI 模型倾向输出智能引号/破折号）──
+            content = self._normalize_ascii(content)
+
             # ── 从 metadata 中提取 message_type ──
             out_meta = dict(metadata) if metadata else {}
 
@@ -394,6 +397,31 @@ class CodesharkAdapter(BasePlatformAdapter):
             "type": "group",
             "platform": "codeshark",
         }
+
+    # ────────────────────────────────────────────────────────────
+    # Text normalization
+    # ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_ascii(text: str) -> str:
+        """Replace typographic characters with ASCII equivalents.
+
+        AI models tend to output smart quotes and dashes even when
+        instructed not to.  This is a belt-and-suspenders fix: the
+        channel_prompt asks for ASCII, and we also enforce it here.
+        """
+        if not text:
+            return text
+        return (
+            text
+            .replace("“", '"')   # left double quote  → "
+            .replace("”", '"')   # right double quote → "
+            .replace("‘", "'")   # left single quote  → '
+            .replace("’", "'")   # right single quote → '
+            .replace("–", "--")  # en dash            → --
+            .replace("—", "---") # em dash            → ---
+            .replace("…", "...") # ellipsis           → ...
+        )
 
     # ────────────────────────────────────────────────────────────
     # Internal helpers
