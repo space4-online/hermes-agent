@@ -227,12 +227,29 @@ class CodesharkAdapter(BasePlatformAdapter):
                 user_name=sender_name,
                 message_id=message_id,
             )
+
+            # 注入 workspace 上下文（文件目录约束 + 同步流程）
+            workspace_dir = f"/opt/data/workspace/{workspace_id}"
+            channel_prompt = (
+                f"## Workspace Context\n"
+                f"You are in workspace {workspace_id}. "
+                f"Your working directory is {workspace_dir}/. "
+                f"All file operations (write_file, patch, terminal) must use this directory. "
+                f"Never write files outside {workspace_dir}/.\n\n"
+                f"### File Sync Protocol\n"
+                f"1. On session start, run: "
+                f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py init --workspace-id {workspace_id}\n"
+                f"2. After every write_file, run: "
+                f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py push --workspace-id {workspace_id} --path <relative_path>\n"
+                f"3. Sync script env vars: CODESHARK_BOT_API_URL and CODESHARK_BOT_API_KEY are pre-configured."
+            )
             event = MessageEvent(
                 text=text,
                 message_type=MessageType.TEXT,
                 source=source,
                 message_id=message_id,
                 timestamp=datetime.now(),
+                channel_prompt=channel_prompt,
             )
 
             # 触发 gateway 消息处理流程
