@@ -308,7 +308,21 @@ class CodesharkAdapter(BasePlatformAdapter):
             workspace_id = chat_id.split(":", 1)[-1] if ":" in chat_id else chat_id
 
             # ── 平台消息格式化（一站式：去内部块 + 转 ASCII）──
-            content = self._format_for_platform(content)
+            raw_len = len(content)
+            raw_preview = content[:100].replace("\n", "\\n")
+            logger.info(
+                "[Codeshark] send() raw=%d chars, preview: %s...",
+                raw_len, raw_preview,
+            )
+            try:
+                content = self._format_for_platform(content)
+            except Exception as fmt_err:
+                logger.error("[Codeshark] _format_for_platform failed: %s", fmt_err, exc_info=True)
+            clean_preview = content[:100].replace("\n", "\\n") if content else "(empty)"
+            logger.info(
+                "[Codeshark] send() clean=%d chars, preview: %s...",
+                len(content), clean_preview,
+            )
 
             # ── 从 metadata 中提取 message_type ──
             out_meta = dict(metadata) if metadata else {}
