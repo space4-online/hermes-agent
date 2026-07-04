@@ -228,7 +228,7 @@ class CodesharkAdapter(BasePlatformAdapter):
                 message_id=message_id,
             )
 
-            # 注入 workspace 上下文（文件目录约束 + 同步流程）
+            # 注入 workspace 上下文
             workspace_dir = f"/opt/data/workspace/{workspace_id}"
             api_url = self._bot_api_url or ""
             api_key = self._bot_api_key or ""
@@ -239,21 +239,10 @@ class CodesharkAdapter(BasePlatformAdapter):
                 f" --workspace-id {workspace_id}"
             )
             channel_prompt = (
-                f"## Workspace Context\n"
-                f"You are in workspace {workspace_id}. "
-                f"Your working directory is {workspace_dir}/. "
-                f"All file operations (write_file, patch, terminal) must use this directory. "
-                f"Never write files outside {workspace_dir}/.\n\n"
-                f"### Output Rules\n"
-                f"Use ONLY plain ASCII characters in tool call XML. "
-                f'Use straight double quotes (") not curly quotes. '
-                f'Use two hyphens (--) not em/en dashes. '
-                f"Your output is rendered as plain text — typographic characters break XML parsing.\n\n"
-                f"### File Sync Protocol\n"
-                f"1. On session start, run: {sync_base} init\n"
-                f"2. After every write_file, run: "
-                f"{sync_base} push --path <relative_path>\n"
-                f"3. Check status: {sync_base} status"
+                f"Workspace {workspace_id}. Work dir: {workspace_dir}/. "
+                f"Use this dir for all file ops. "
+                f"On start: {sync_base} init. "
+                f"After write_file: {sync_base} push --path <path>."
             )
             event = MessageEvent(
                 text=text,
