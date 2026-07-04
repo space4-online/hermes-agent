@@ -318,7 +318,8 @@ class CodesharkAdapter(BasePlatformAdapter):
             # 解析 workspace_id
             workspace_id = chat_id.split(":", 1)[-1] if ":" in chat_id else chat_id
 
-            # ── 强制替换排版字符为 ASCII（AI 模型倾向输出智能引号/破折号）──
+            # ── 过滤内部推理块 + 强制 ASCII ──
+            content = self._strip_internal_blocks(content)
             content = self._normalize_ascii(content)
 
             # ── 从 metadata 中提取 message_type ──
@@ -429,6 +430,26 @@ class CodesharkAdapter(BasePlatformAdapter):
             .replace("—", "---") # em dash            → ---
             .replace("…", "...") # ellipsis           → ...
         )
+
+    @staticmethod
+    def _strip_internal_blocks(text: str) -> str:
+        """Remove agent internal thinking/tool-call blocks from user-facing reply.
+
+        Stripped content:
+          - <invoke ...>...</invoke> blocks (raw text, not HTML tags)
+          - <tool_calls> / </tool_calls> wrapper lines
+          - Consecutive blank lines collapsed
+        """
+        if not text:
+            return text
+        import re
+        # Remove <invoke ...>...</invoke> blocks
+        text = re.sub(r"<invoke[^>]*>.*?</invoke>", "", text, flags=re.DOTALL)
+        # Remove orphan tool_calls wrapper tags
+        text = re.sub(r"^[ \t]*</?tool_calls>[ \t]*$", "", text, flags=re.MULTILINE)
+        # Collapse 3+ blank lines to 2
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     # ────────────────────────────────────────────────────────────
     # Internal helpers
