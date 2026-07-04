@@ -416,43 +416,38 @@ class CodesharkAdapter(BasePlatformAdapter):
     def _format_for_platform(text: str) -> str:
         """Post-process agent output before delivering to the Codeshark frontend.
 
-        This is the single place where all platform-specific formatting lives.
-        The agent's internal processing (channel_prompt) stays clean — all
-        message scrubbing happens here, at the adapter boundary.
-
-        Operations (in order):
-          1. Strip agent internal blocks (reasoning, tool-call XML)
-          2. Replace typographic characters with ASCII
-          3. Collapse blank lines
+        All platform-specific formatting lives here, at the adapter boundary.
+        Agent internal processing stays clean.
         """
         if not text:
             return text
         import re
 
-        # ── 1. Strip agent internal blocks ──
-        # Tool calls: <tool_calls>...<invoke name="...">...</invoke>...</tool_calls>
+        # ── 1. Strip <tool_calls>...<invoke>...</invoke>...</tool_calls> ──
         text = re.sub(
             r"<tool_calls>\s*(?:<invoke[^>]*>.*?</invoke>\s*)*</tool_calls>",
             "", text, flags=re.DOTALL,
         )
-        # Standalone invoke blocks (without tool_calls wrapper)
+        # Standalone invoke blocks
         text = re.sub(r"<invoke[^>]*>.*?</invoke>", "", text, flags=re.DOTALL)
-        # Reasoning header: "💭 Reasoning:" through the next blank line or tool block
-        text = re.sub(r"💭\s*Reasoning:.*?(?=\n\n|\n(?:<tool_calls>|<invoke)|$)", "", text, flags=re.DOTALL)
 
-        # ── 2. Replace typographic characters with ASCII ──
-        for typo, ascii in [
-            ("“", '"'),   # " → "
-            ("”", '"'),   # " → "
-            ("‘", "'"),   # ' → '
-            ("’", "'"),   # ' → '
-            ("–", "--"),  # – → --
-            ("—", "---"), # — → ---
-            ("…", "..."), # … → ...
+        # ── 2. Strip reasoning lines (💭 prefix) ──
+        # Remove lines starting with 💭 and their continuation (until blank line)
+        text = re.sub(r"💭[^\n]*(?:\n(?!\n|💭)[^\n]*)*", "", text)
+
+        # ── 3. Replace typographic characters with ASCII ──
+        for typo, ascii_char in [
+            ("“", '"'),   # "
+            ("”", '"'),   # "
+            ("‘", "'"),   # '
+            ("’", "'"),   # '
+            ("–", "--"),  # –
+            ("—", "---"), # —
+            ("…", "..."), # …
         ]:
-            text = text.replace(typo, ascii)
+            text = text.replace(typo, ascii_char)
 
-        # ── 3. Clean up whitespace ──
+        # ── 4. Clean up ──
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
