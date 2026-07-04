@@ -21,12 +21,13 @@ name: Build and Deploy Hermes (Server)
 
 on:
   push:
-    branches: [ "master", "dev" ]
+    branches: [ "master" ]
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: hermes-product
 
     steps:
       - name: Checkout code
