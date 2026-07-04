@@ -24,6 +24,7 @@ metadata:
 
 | 命令 | 说明 |
 |------|------|
+| `ensure-init` | 为已有工作区补充 OSS 文件夹初始化（幂等） |
 | `init` | 从 OSS 全量拉取文件到本地，创建 `.workspace_sync_state.json` 状态文件 |
 | `push --path <p>` | 上传单个文件到 OSS |
 | `push-all` | 扫描本地变更，批量上传 |

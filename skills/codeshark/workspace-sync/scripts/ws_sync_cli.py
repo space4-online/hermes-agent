@@ -141,6 +141,18 @@ def scan_local_files(workspace_dir: Path) -> List[Dict[str, Any]]:
 
 # ── Commands ─────────────────────────────────────────────────────
 
+def cmd_ensure_init(workspace_id: int):
+    """为已有工作区补充 OSS 文件夹初始化（幂等）。"""
+    url = _api_url(workspace_id, "/ensure-oss-init")
+    _, body, _ = _request("POST", url)
+    result = json.loads(body)
+    data = result.get("data", result)
+    if data.get("initialized"):
+        print(f"[ensure-init] ✓ OSS 目录已初始化: {data.get('markerKey', '')}")
+    else:
+        print(f"[ensure-init] ✓ OSS 目录已存在，无需初始化")
+
+
 def cmd_init(workspace_id: int, workspace_dir: Path):
     """全量拉取 OSS → 本地。"""
     print(f"[init] 开始从 OSS 拉取 workspace/{workspace_id} ...")
@@ -322,7 +334,7 @@ def main():
         """,
     )
 
-    parser.add_argument("command", choices=["init", "push", "push-all", "pull", "pull-all", "status"])
+    parser.add_argument("command", choices=["init", "push", "push-all", "pull", "pull-all", "status", "ensure-init"])
     parser.add_argument("--workspace-id", type=int, required=True,
                         help="工作区 ID")
     parser.add_argument("--workspace-dir", type=str, default=None,
@@ -351,6 +363,8 @@ def main():
     cmd = args.command
     if cmd == "init":
         cmd_init(args.workspace_id, workspace_dir)
+    elif cmd == "ensure-init":
+        cmd_ensure_init(args.workspace_id)
     elif cmd == "push":
         if not args.path:
             print("[ERROR] push 命令需要 --path 参数", file=sys.stderr)
