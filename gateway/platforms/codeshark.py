@@ -230,6 +230,14 @@ class CodesharkAdapter(BasePlatformAdapter):
 
             # 注入 workspace 上下文（文件目录约束 + 同步流程）
             workspace_dir = f"/opt/data/workspace/{workspace_id}"
+            api_url = self._bot_api_url or ""
+            api_key = self._bot_api_key or ""
+            sync_base = (
+                f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py"
+                f" --api-base-url {api_url}"
+                f" --api-key {api_key}"
+                f" --workspace-id {workspace_id}"
+            )
             channel_prompt = (
                 f"## Workspace Context\n"
                 f"You are in workspace {workspace_id}. "
@@ -242,11 +250,10 @@ class CodesharkAdapter(BasePlatformAdapter):
                 f'Use two hyphens (--) not em/en dashes. '
                 f"Your output is rendered as plain text — typographic characters break XML parsing.\n\n"
                 f"### File Sync Protocol\n"
-                f"1. On session start, run: "
-                f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py init --workspace-id {workspace_id}\n"
+                f"1. On session start, run: {sync_base} init\n"
                 f"2. After every write_file, run: "
-                f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py push --workspace-id {workspace_id} --path <relative_path>\n"
-                f"3. Sync script env vars: CODESHARK_BOT_API_URL and CODESHARK_BOT_API_KEY are pre-configured."
+                f"{sync_base} push --path <relative_path>\n"
+                f"3. Check status: {sync_base} status"
             )
             event = MessageEvent(
                 text=text,
