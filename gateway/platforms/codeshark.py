@@ -204,6 +204,7 @@ class CodesharkAdapter(BasePlatformAdapter):
 
             # 解析消息字段
             workspace_id = str(body.get("workspace_id", ""))
+            conversation_id = str(body.get("conversation_id", ""))
             sender_id = str(body.get("sender_id", ""))
             sender_name = str(body.get("sender_name", sender_id))
             content = str(body.get("content", ""))
@@ -218,9 +219,13 @@ class CodesharkAdapter(BasePlatformAdapter):
             text = self._strip_mention(content)
 
             # 构造 MessageEvent
+            # chat_id 格式: codeshark:{wid}[:{cid}]（conversation_id 可选，向后兼容）
             from gateway.platforms.base import MessageEvent
+            _chat_id = f"codeshark:{workspace_id}"
+            if conversation_id:
+                _chat_id = f"codeshark:{workspace_id}:{conversation_id}"
             source = self._build_source(
-                chat_id=f"codeshark:{workspace_id}",
+                chat_id=_chat_id,
                 chat_name=f"Workspace {workspace_id}",
                 chat_type="group",
                 user_id=sender_id,
@@ -304,8 +309,11 @@ class CodesharkAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="bot_api_url not configured")
 
         try:
-            # 解析 workspace_id
-            workspace_id = chat_id.split(":", 1)[-1] if ":" in chat_id else chat_id
+            # 解析 workspace_id 和 conversation_id
+            # chat_id 格式: codeshark:{wid} 或 codeshark:{wid}:{cid}
+            _parts = chat_id.split(":") if ":" in chat_id else [chat_id]
+            workspace_id = _parts[1] if len(_parts) >= 2 else _parts[0]
+            conversation_id = _parts[2] if len(_parts) >= 3 else None
 
             # ── 平台消息格式化（一站式：去内部块 + 转 ASCII）──
             raw_len = len(content)
@@ -363,7 +371,12 @@ class CodesharkAdapter(BasePlatformAdapter):
                 except (ValueError, TypeError):
                     pass
 
-            url = f"{self._bot_api_url.rstrip('/')}/v2/workspace/bot/{workspace_id}/messages"
+            # 构造 Bot API URL（带 conversation_id 时使用新路径）
+            _api_base = self._bot_api_url.rstrip('/')
+            if conversation_id:
+                url = f"{_api_base}/v2/workspace/bot/{workspace_id}/conversation/{conversation_id}/messages"
+            else:
+                url = f"{_api_base}/v2/workspace/bot/{workspace_id}/messages"
             headers = {
                 "Content-Type": "application/json",
                 "X-Bot-Api-Key": self._bot_api_key,
@@ -401,12 +414,17 @@ class CodesharkAdapter(BasePlatformAdapter):
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """返回 workspace 基本信息。"""
-        workspace_id = chat_id.split(":", 1)[-1] if ":" in chat_id else chat_id
-        return {
+        _parts = chat_id.split(":") if ":" in chat_id else [chat_id]
+        workspace_id = _parts[1] if len(_parts) >= 2 else _parts[0]
+        conversation_id = _parts[2] if len(_parts) >= 3 else None
+        info = {
             "name": f"Workspace {workspace_id}",
             "type": "group",
             "platform": "codeshark",
         }
+        if conversation_id:
+            info["name"] = f"Workspace {workspace_id} / Conv {conversation_id}"
+        return info
 
     # ────────────────────────────────────────────────────────────
     # Text normalization

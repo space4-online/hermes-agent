@@ -15255,7 +15255,10 @@ class GatewayRunner:
                 # ensures ~/.hermes/sandboxes/docker/ws-{wid}/ survives session changes.
                 _task_id = session_id
                 if source.platform == Platform.CODESHARK:
-                    _workspace_id = source.chat_id.split(":", 1)[-1] if ":" in source.chat_id else source.chat_id
+                    # chat_id format: codeshark:{wid} or codeshark:{wid}:{cid}
+                    # workspace_id is always the second segment
+                    _parts = source.chat_id.split(":") if ":" in source.chat_id else [source.chat_id]
+                    _workspace_id = _parts[1] if len(_parts) >= 2 else _parts[0]
                     _task_id = f"ws-{_workspace_id}"
                 result = agent.run_conversation(_run_message, conversation_history=agent_history, task_id=_task_id)
             finally:
