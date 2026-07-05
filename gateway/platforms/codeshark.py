@@ -193,7 +193,7 @@ class CodesharkAdapter(BasePlatformAdapter):
             # 去掉 /api 后缀，构造 bot 端点
             if api_base.endswith("/api"):
                 api_base = api_base[:-4]
-            url = f"{api_base}/api/v2/workspace/bot/{workspace_id}/skills?since={since}"
+            url = f"{api_base}/v2/workspace/{workspace_id}/skills?since={since}"
 
             headers = {"X-Bot-Api-Key": self._bot_api_key}
             async with self._http_session.get(url, headers=headers) as resp:
@@ -499,12 +499,10 @@ class CodesharkAdapter(BasePlatformAdapter):
                 except (ValueError, TypeError):
                     pass
 
-            # 构造 Bot API URL（带 conversation_id 时使用新路径）
+            # 构造 Bot API URL（统一路径，Bot/User 双鉴权）
             _api_base = self._bot_api_url.rstrip('/')
-            if conversation_id:
-                url = f"{_api_base}/v2/workspace/bot/{workspace_id}/conversation/{conversation_id}/messages"
-            else:
-                url = f"{_api_base}/v2/workspace/bot/{workspace_id}/messages"
+            _cid = conversation_id or f"default-{workspace_id}"
+            url = f"{_api_base}/v2/workspace/{workspace_id}/conversation/{_cid}/messages"
             headers = {
                 "Content-Type": "application/json",
                 "X-Bot-Api-Key": self._bot_api_key,
