@@ -365,16 +365,46 @@ class CodesharkAdapter(BasePlatformAdapter):
             workspace_dir = f"/opt/data/workspace/{workspace_id}"
             api_url = self._bot_api_url or ""
             api_key = self._bot_api_key or ""
+            sync_cli = "skills/codeshark/workspace-sync/scripts/ws_sync_cli.py"
             sync_base = (
-                f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py"
+                f"python3 {sync_cli}"
                 f" --api-base-url {api_url}"
                 f" --api-key {api_key}"
                 f" --workspace-id {workspace_id}"
             )
+
+            # 每次对话前检查同步状态，不一致则先拉取
+            try:
+                check_cmd = f"python3 {sync_cli} --api-base-url {api_url} --api-key {api_key} --workspace-id {workspace_id} sync-check"
+                proc = await asyncio.create_subprocess_shell(
+                    check_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                if proc.returncode == 1:
+                    # 需要同步，先拉取
+                    logger.info("[Codeshark] Sync needed for wid=%s, pulling...", workspace_id)
+                    pull_cmd = f"python3 {sync_cli} --api-base-url {api_url} --api-key {api_key} --workspace-id {workspace_id} pull-all"
+                    pull_proc = await asyncio.create_subprocess_shell(
+                        pull_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await asyncio.wait_for(pull_proc.communicate(), timeout=60)
+                    logger.info("[Codeshark] Pull done for wid=%s (rc=%d)", workspace_id, pull_proc.returncode)
+                elif proc.returncode == 0:
+                    logger.debug("[Codeshark] Sync ok for wid=%s", workspace_id)
+                else:
+                    logger.warning("[Codeshark] Sync check error for wid=%s: %s", workspace_id, stderr.decode()[:200])
+            except asyncio.TimeoutError:
+                logger.warning("[Codeshark] Sync check timeout for wid=%s", workspace_id)
+            except Exception as sync_err:
+                logger.warning("[Codeshark] Sync check failed for wid=%s: %s", workspace_id, sync_err)
+
             channel_prompt = (
                 f"Workspace {workspace_id}. Work dir: {workspace_dir}/. "
                 f"Use this dir for all file ops. "
-                f"On start: {sync_base} init. "
                 f"After write_file: {sync_base} push --path <path>."
             )
             event = MessageEvent(

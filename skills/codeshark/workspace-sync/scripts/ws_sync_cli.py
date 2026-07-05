@@ -187,7 +187,8 @@ def cmd_init(workspace_id: int, workspace_dir: Path):
 
             file_sha256 = sha256_bytes(content)
             file_size = int(headers.get("X-File-Size", len(content)))
-            state["files"][path] = {"sha256": file_sha256, "size": file_size}
+            file_lm = entry.get("lastModified", "")
+            state["files"][path] = {"sha256": file_sha256, "size": file_size, "lastModified": file_lm}
             downloaded += 1
             print(f"  ✓ {path} ({file_size} bytes)")
         except Exception as e:
@@ -278,6 +279,49 @@ def cmd_pull_all(workspace_id: int, workspace_dir: Path):
     cmd_init(workspace_id, workspace_dir)
 
 
+def cmd_sync_check(workspace_id: int, workspace_dir: Path):
+    """快速检查 OSS 是否有变更（用于每轮对话前自动同步）。
+    返回码: 0=已同步, 1=需要拉取, 2=错误
+    """
+    # 获取 OSS 文件列表及 lastModified
+    url = _api_url(workspace_id, "/files")
+    try:
+        resp = _get_json(url)
+    except Exception as e:
+        print(f"[sync-check] ERROR: 无法获取 OSS 文件列表: {e}", file=sys.stderr)
+        sys.exit(2)
+    data = resp.get("data", resp)
+    oss_files = data.get("files", [])
+
+    # 构建 OSS 指纹：path|lastModified|size
+    oss_fingerprints = []
+    for f in oss_files:
+        p = f.get("path", "")
+        lm = f.get("lastModified", "")
+        sz = f.get("size", 0)
+        if p:
+            oss_fingerprints.append(f"{p}|{lm}|{sz}")
+    oss_fp = "\n".join(sorted(oss_fingerprints))
+
+    # 本地指纹
+    state = load_state(workspace_dir)
+    local_fingerprints = []
+    for p, info in state.get("files", {}).items():
+        lm = info.get("lastModified", "")
+        sz = info.get("size", 0)
+        local_fingerprints.append(f"{p}|{lm}|{sz}")
+    local_fp = "\n".join(sorted(local_fingerprints))
+
+    if oss_fp == local_fp:
+        print(f"[sync-check] ✓ 已同步 ({len(oss_files)} 文件)")
+        sys.exit(0)
+    else:
+        new_files = [f for f in oss_files if f.get("path", "") not in state.get("files", {})]
+        print(f"[sync-check] ⚠ 需要同步: OSS {len(oss_files)} 文件, 本地 {len(state.get('files', {}))} 文件" +
+              (f", 新增 {len(new_files)}" if new_files else ""))
+        sys.exit(1)
+
+
 def cmd_status(workspace_id: int, workspace_dir: Path):
     """对比本地 manifest 与 OSS 状态。"""
     local_files = scan_local_files(workspace_dir)
@@ -334,7 +378,7 @@ def main():
         """,
     )
 
-    parser.add_argument("command", choices=["init", "push", "push-all", "pull", "pull-all", "status", "ensure-init"])
+    parser.add_argument("command", choices=["init", "push", "push-all", "pull", "pull-all", "status", "ensure-init", "sync-check"])
     parser.add_argument("--workspace-id", type=int, required=True,
                         help="工作区 ID")
     parser.add_argument("--workspace-dir", type=str, default=None,
@@ -379,6 +423,8 @@ def main():
         cmd_pull(args.workspace_id, workspace_dir, args.path)
     elif cmd == "pull-all":
         cmd_pull_all(args.workspace_id, workspace_dir)
+    elif cmd == "sync-check":
+        cmd_sync_check(args.workspace_id, workspace_dir)
     elif cmd == "status":
         cmd_status(args.workspace_id, workspace_dir)
 
