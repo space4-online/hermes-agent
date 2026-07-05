@@ -538,7 +538,8 @@ class CodesharkAdapter(BasePlatformAdapter):
                             pass  # 续期失败，以 Bot 身份继续
 
                     if resp.status == 200:
-                        )
+                        data = await resp.json()
+                        msg_id = str(data.get("data", {}).get("id", ""))
                         return SendResult(success=True, message_id=msg_id)
                     else:
                         body = await resp.text()
