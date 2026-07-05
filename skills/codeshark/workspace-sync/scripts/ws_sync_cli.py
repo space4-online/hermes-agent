@@ -209,8 +209,10 @@ def cmd_push(workspace_id: int, workspace_dir: Path, relative_path: str):
     file_sha256 = sha256_bytes(content)
 
     url = _api_url(workspace_id, "/files/upload")
+    # URL-encode 文件名：HTTP header 只支持 ASCII/latin-1，中文等需编码
+    encoded_path = quote(relative_path, safe="/")
     headers = {
-        "X-File-Path": relative_path,
+        "X-File-Path": encoded_path,
         "Content-Type": "application/octet-stream",
     }
     _, body, _ = _request("POST", url, data=content, headers=headers)
