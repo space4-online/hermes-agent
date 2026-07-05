@@ -84,6 +84,10 @@ class CodesharkAdapter(BasePlatformAdapter):
         # 幂等去重缓存：{message_id: timestamp}
         self._dedup_cache: Dict[str, float] = {}
 
+        # Skill 同步状态：{workspace_id: {lastSync: timestamp, skills: [skillKey, ...]}}
+        self._skill_sync_state: Dict[str, dict] = {}
+        self._skill_state_file = os.path.join(os.getenv("HERMES_HOME", os.path.expanduser("~/.hermes")), "workspace_skill_state.json")
+
     # ────────────────────────────────────────────────────────────
     # Source building
     # ────────────────────────────────────────────────────────────
@@ -134,6 +138,7 @@ class CodesharkAdapter(BasePlatformAdapter):
                 )
 
             self._mark_connected()
+            self._load_skill_state()
             logger.info(
                 "[Codeshark] Adapter listening on http://%s:%d",
                 self._host, self._port,
@@ -143,6 +148,115 @@ class CodesharkAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.error("[Codeshark] Failed to start adapter: %s", e)
             return False
+
+    # ────────────────────────────────────────────────────────────
+    # Workspace skill sync
+    # ────────────────────────────────────────────────────────────
+
+    def _load_skill_state(self) -> None:
+        """从磁盘加载 skill 同步缓存。"""
+        try:
+            if os.path.exists(self._skill_state_file):
+                with open(self._skill_state_file, "r") as f:
+                    self._skill_sync_state = json.load(f)
+                logger.info("[Codeshark] Loaded skill sync state: %d workspace(s)", len(self._skill_sync_state))
+        except Exception:
+            self._skill_sync_state = {}
+
+    def _save_skill_state(self) -> None:
+        """持久化 skill 同步缓存到磁盘。"""
+        try:
+            os.makedirs(os.path.dirname(self._skill_state_file), exist_ok=True)
+            with open(self._skill_state_file, "w") as f:
+                json.dump(self._skill_sync_state, f)
+        except Exception as e:
+            logger.warning("[Codeshark] Failed to save skill state: %s", e)
+
+    async def _sync_workspace_skills(self, workspace_id: str, full: bool = False) -> None:
+        """从后端同步 workspace skill 到 Agent 本地 skills 目录。
+
+        full=True:  全量拉取（首次 session 或 /sync-skill 命令）
+        full=False: 增量拉取（使用上次 serverTime）
+        """
+        if not self._bot_api_url or not self._bot_api_key:
+            logger.warning("[Codeshark] Skill sync skipped: bot_api_url or bot_api_key not configured")
+            return
+
+        state = self._skill_sync_state.get(workspace_id, {})
+        since = 0 if full else state.get("lastSync", 0)
+
+        try:
+            # 调用后端 API
+            # bot_api_url 格式: https://dev.codeshark.cn/api
+            # skill 端点: /v2/workspace/bot/{wid}/skills
+            api_base = self._bot_api_url.rstrip("/")
+            # 去掉 /api 后缀，构造 bot 端点
+            if api_base.endswith("/api"):
+                api_base = api_base[:-4]
+            url = f"{api_base}/api/v2/workspace/bot/{workspace_id}/skills?since={since}"
+
+            headers = {"X-Bot-Api-Key": self._bot_api_key}
+            async with self._http_session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning("[Codeshark] Skill sync failed: HTTP %s", resp.status)
+                    return
+                data = await resp.json()
+
+            changes = data.get("data", {}).get("skills", [])
+            server_time = data.get("data", {}).get("serverTime", 0)
+
+            if not changes:
+                logger.debug("[Codeshark] Skill sync: wid=%s no changes", workspace_id)
+                return
+
+            # 写入/删除本地 SKILL.md 文件
+            skill_dir = os.path.join(
+                os.getenv("HERMES_HOME", os.path.expanduser("~/.hermes")),
+                "skills", f"workspace-{workspace_id}",
+            )
+            os.makedirs(skill_dir, exist_ok=True)
+
+            for sk in changes:
+                skill_key = sk.get("skillKey", "")
+                if not skill_key:
+                    continue
+                path = os.path.join(skill_dir, f"{skill_key}.md")
+
+                if sk.get("action") == "delete":
+                    if os.path.exists(path):
+                        os.remove(path)
+                        logger.info("[Codeshark] Skill deleted: wid=%s key=%s", workspace_id, skill_key)
+                else:
+                    skill_md = sk.get("skillMd", "")
+                    if skill_md:
+                        with open(path, "w", encoding="utf-8") as f:
+                            f.write(skill_md)
+                        logger.info("[Codeshark] Skill upserted: wid=%s key=%s", workspace_id, skill_key)
+
+            # 增量注册到 Hermes skill 系统
+            try:
+                from agent.skill_commands import scan_skill_commands
+                scan_skill_commands()
+            except Exception:
+                pass
+
+            # 更新缓存
+            skill_keys = [s.get("skillKey") for s in changes if s.get("action") != "delete"]
+            self._skill_sync_state[workspace_id] = {
+                "lastSync": server_time if server_time > 0 else int(time.time()),
+                "skills": skill_keys,
+            }
+            self._save_skill_state()
+
+            logger.info(
+                "[Codeshark] Skill sync done: wid=%s upserted=%d deleted=%d",
+                workspace_id,
+                sum(1 for s in changes if s.get("action") != "delete"),
+                sum(1 for s in changes if s.get("action") == "delete"),
+            )
+
+        except Exception as e:
+            logger.error("[Codeshark] Skill sync error: wid=%s err=%s", workspace_id, e)
 
     async def disconnect(self) -> None:
         """停止 HTTP 端点。"""
@@ -217,6 +331,20 @@ class CodesharkAdapter(BasePlatformAdapter):
 
             # 去除 @Hermes 前缀（保留实际指令内容）
             text = self._strip_mention(content)
+
+            # Skill 同步：首次 session 全量拉取
+            if workspace_id not in self._skill_sync_state:
+                logger.info("[Codeshark] First session for workspace %s, syncing skills", workspace_id)
+                await self._sync_workspace_skills(workspace_id, full=True)
+
+            # /sync-skill 命令：强制全量刷新
+            if text.strip() == "/sync-skill":
+                await self._sync_workspace_skills(workspace_id, full=True)
+                return web.json_response({
+                    "ok": True,
+                    "message": "Skills synced",
+                    "skills": self._skill_sync_state.get(workspace_id, {}).get("skills", []),
+                })
 
             # 构造 MessageEvent
             # chat_id 格式: codeshark:{wid}[:{cid}]（conversation_id 可选，向后兼容）
