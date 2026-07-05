@@ -42,7 +42,7 @@ DEFAULT_API_BASE = os.environ.get("CODESHARK_BOT_API_URL", "")
 DEFAULT_API_KEY = os.environ.get("CODESHARK_BOT_API_KEY", "")
 
 STATE_FILE = ".workspace_sync_state.json"
-API_PATH = "/v2/workspace/bot/agent-sync"
+API_PATH = "/v2/workspace"
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────
@@ -158,7 +158,7 @@ def cmd_init(workspace_id: int, workspace_dir: Path):
     print(f"[init] 开始从 OSS 拉取 workspace/{workspace_id} ...")
 
     # 1. 列出 OSS 文件
-    url = _api_url(workspace_id, "/files")
+    url = _api_url(workspace_id, "/file")
     resp = _get_json(url)
     data = resp.get("data", resp)
     oss_files = data.get("files", [])
@@ -177,7 +177,7 @@ def cmd_init(workspace_id: int, workspace_dir: Path):
         if not path:
             continue
         try:
-            dl_url = _api_url(workspace_id, f"/files/download?path={_url_quote(path)}")
+            dl_url = _api_url(workspace_id, f"/file/content?path={_url_quote(path)}")
             _, body, headers = _request("GET", dl_url)
             content = body
 
@@ -208,7 +208,7 @@ def cmd_push(workspace_id: int, workspace_dir: Path, relative_path: str):
     content = local_file.read_bytes()
     file_sha256 = sha256_bytes(content)
 
-    url = _api_url(workspace_id, "/files/upload")
+    url = _api_url(workspace_id, "/file/upload-agent")
     # URL-encode 文件名：HTTP header 只支持 ASCII/latin-1，中文等需编码
     encoded_path = quote(relative_path, safe="/")
     headers = {
@@ -258,7 +258,7 @@ def cmd_push_all(workspace_id: int, workspace_dir: Path):
 
 def cmd_pull(workspace_id: int, workspace_dir: Path, relative_path: str):
     """下载单个文件到本地。"""
-    dl_url = _api_url(workspace_id, f"/files/download?path={_url_quote(relative_path)}")
+    dl_url = _api_url(workspace_id, f"/file/content?path={_url_quote(relative_path)}")
     _, body, headers = _request("GET", dl_url)
 
     local_path = workspace_dir / relative_path
@@ -286,7 +286,7 @@ def cmd_sync_check(workspace_id: int, workspace_dir: Path):
     返回码: 0=已同步, 1=需要拉取, 2=错误
     """
     # 获取 OSS 文件列表及 lastModified
-    url = _api_url(workspace_id, "/files")
+    url = _api_url(workspace_id, "/file")
     try:
         resp = _get_json(url)
     except Exception as e:
@@ -328,7 +328,7 @@ def cmd_status(workspace_id: int, workspace_dir: Path):
     """对比本地 manifest 与 OSS 状态。"""
     local_files = scan_local_files(workspace_dir)
 
-    url = _api_url(workspace_id, "/sync")
+    url = _api_url(workspace_id, "/file/sync")
     payload = json.dumps({"localFiles": local_files}).encode("utf-8")
     _, body, _ = _request("POST", url, data=payload,
                           headers={"Content-Type": "application/json"})
