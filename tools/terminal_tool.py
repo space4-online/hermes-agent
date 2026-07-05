@@ -983,6 +983,11 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     """
     if task_id and task_id in _task_env_overrides:
         return task_id
+    # Workspace-scoped sandboxes (e.g. CodeShark "ws-{workspace_id}"):
+    # keep them isolated per workspace rather than collapsing to "default"
+    # so different workspaces don't share /workspace content.
+    if task_id and task_id.startswith("ws-"):
+        return task_id
     return "default"
 
 

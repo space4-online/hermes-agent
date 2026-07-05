@@ -5643,7 +5643,7 @@ class AIAgent:
         Safe to call multiple times (idempotent).  Each cleanup step is
         independently guarded so a failure in one does not prevent the rest.
         """
-        task_id = getattr(self, "session_id", None) or ""
+        task_id = getattr(self, "_current_task_id", None) or getattr(self, "session_id", None) or ""
 
         # 1. Kill background processes for this task
         try:

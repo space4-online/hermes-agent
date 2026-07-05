@@ -15248,7 +15248,16 @@ class GatewayRunner:
                 else:
                     _run_message = message
 
-                result = agent.run_conversation(_run_message, conversation_history=agent_history, task_id=session_id)
+                # CodeShark workspace: bind task_id (and thus Docker sandbox dir)
+                # to the stable workspace_id rather than the ephemeral session_id.
+                # session_id rotates on idle timeout, daily reset, /new, compaction
+                # — which would orphan all workspace files.  Workspace-scoped task_id
+                # ensures ~/.hermes/sandboxes/docker/ws-{wid}/ survives session changes.
+                _task_id = session_id
+                if source.platform == Platform.CODESHARK:
+                    _workspace_id = source.chat_id.split(":", 1)[-1] if ":" in source.chat_id else source.chat_id
+                    _task_id = f"ws-{_workspace_id}"
+                result = agent.run_conversation(_run_message, conversation_history=agent_history, task_id=_task_id)
             finally:
                 unregister_gateway_notify(_approval_session_key)
                 reset_current_session_key(_approval_session_token)
