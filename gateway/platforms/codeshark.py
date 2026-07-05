@@ -88,6 +88,10 @@ class CodesharkAdapter(BasePlatformAdapter):
         self._skill_sync_state: Dict[str, dict] = {}
         self._skill_state_file = os.path.join(os.getenv("HERMES_HOME", os.path.expanduser("~/.hermes")), "workspace_skill_state.json")
 
+        # 零信任代理令牌：每条消息携带，Agent 用完后丢弃
+        self._delegation_token: Optional[str] = None
+        self._delegation_expires: float = 0
+
     # ────────────────────────────────────────────────────────────
     # Source building
     # ────────────────────────────────────────────────────────────
@@ -332,6 +336,10 @@ class CodesharkAdapter(BasePlatformAdapter):
             # 去除 @Hermes 前缀（保留实际指令内容）
             text = self._strip_mention(content)
 
+            # 零信任代理令牌：从消息中提取，用于后续 API 调用
+            self._delegation_token = body.get("delegation_token")
+            self._delegation_expires = body.get("delegation_expires", 0)
+
             # Skill 同步：首次 session 全量拉取
             if workspace_id not in self._skill_sync_state:
                 logger.info("[Codeshark] First session for workspace %s, syncing skills", workspace_id)
@@ -507,16 +515,29 @@ class CodesharkAdapter(BasePlatformAdapter):
                 "Content-Type": "application/json",
                 "X-Bot-Api-Key": self._bot_api_key,
             }
+            if self._delegation_token:
+                headers["X-Bot-Proxy-Token"] = self._delegation_token
 
             if self._http_session and not self._http_session.closed:
                 async with self._http_session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 401 and self._delegation_token:
+                        # 令牌过期，用 Bot 身份续期
+                        refresh_url = f"{_api_base}/v2/workspace/bot/delegation/refresh"
+                        refresh_headers = {"Content-Type": "application/json", "X-Bot-Api-Key": self._bot_api_key}
+                        try:
+                            async with self._http_session.post(refresh_url,
+                                    json={"userId": int(sender_id)}, headers=refresh_headers) as r:
+                                if r.status == 200:
+                                    data = await r.json()
+                                    new_token = data.get("data", {}).get("delegation_token")
+                                    if new_token:
+                                        self._delegation_token = new_token
+                                        headers["X-Bot-Proxy-Token"] = new_token
+                                        resp = await self._http_session.post(url, json=payload, headers=headers)
+                        except Exception:
+                            pass  # 续期失败，以 Bot 身份继续
+
                     if resp.status == 200:
-                        data = await resp.json()
-                        msg_id = str(data.get("data", {}).get("id", ""))
-                        logger.info(
-                            "[Codeshark] Reply sent | wid=%s msgId=%s type=%s fmt=%s",
-                            workspace_id, msg_id, message_type,
-                            out_meta.get("content_format", "-"),
                         )
                         return SendResult(success=True, message_id=msg_id)
                     else:
