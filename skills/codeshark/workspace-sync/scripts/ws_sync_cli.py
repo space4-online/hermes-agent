@@ -42,7 +42,7 @@ DEFAULT_API_BASE = os.environ.get("CODESHARK_BOT_API_URL", "")
 DEFAULT_API_KEY = os.environ.get("CODESHARK_BOT_API_KEY", "")
 
 STATE_FILE = ".workspace_sync_state.json"
-API_PATH = "/v2/workspace"
+API_PATH = "/v2/workspace/bot/agent-sync"
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────
