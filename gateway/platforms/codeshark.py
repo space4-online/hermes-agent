@@ -192,12 +192,9 @@ class CodesharkAdapter(BasePlatformAdapter):
         try:
             # 调用后端 API
             # bot_api_url 格式: https://dev.codeshark.cn/api
-            # skill 端点: /v2/workspace/bot/{wid}/skills
+            # bot skill 端点: /v2/workspace/{wid}/bot/skills（BotApiKeyInterceptor 全局鉴权）
             api_base = self._bot_api_url.rstrip("/")
-            # 去掉 /api 后缀，构造 bot 端点
-            if api_base.endswith("/api"):
-                api_base = api_base[:-4]
-            url = f"{api_base}/v2/workspace/{workspace_id}/skills?since={since}"
+            url = f"{api_base}/v2/workspace/{workspace_id}/bot/skills?since={since}"
 
             headers = {"X-Bot-Api-Key": self._bot_api_key}
             async with self._http_session.get(url, headers=headers) as resp:
@@ -224,15 +221,20 @@ class CodesharkAdapter(BasePlatformAdapter):
                 skill_key = sk.get("skillKey", "")
                 if not skill_key:
                     continue
-                path = os.path.join(skill_dir, f"{skill_key}.md")
+                # 每个 skill 一个目录，SKILL.md 为索引文件
+                # 这样 scan_skill_commands → iter_skill_index_files 才能发现
+                skill_subdir = os.path.join(skill_dir, skill_key)
+                path = os.path.join(skill_subdir, "SKILL.md")
 
                 if sk.get("action") == "delete":
-                    if os.path.exists(path):
-                        os.remove(path)
+                    if os.path.exists(skill_subdir):
+                        import shutil
+                        shutil.rmtree(skill_subdir)
                         logger.info("[Codeshark] Skill deleted: wid=%s key=%s", workspace_id, skill_key)
                 else:
                     skill_md = sk.get("skillMd", "")
                     if skill_md:
+                        os.makedirs(skill_subdir, exist_ok=True)
                         with open(path, "w", encoding="utf-8") as f:
                             f.write(skill_md)
                         logger.info("[Codeshark] Skill upserted: wid=%s key=%s", workspace_id, skill_key)
@@ -340,10 +342,13 @@ class CodesharkAdapter(BasePlatformAdapter):
             self._delegation_token = body.get("delegation_token")
             self._delegation_expires = body.get("delegation_expires", 0)
 
-            # Skill 同步：首次 session 全量拉取
-            if workspace_id not in self._skill_sync_state:
-                logger.info("[Codeshark] First session for workspace %s, syncing skills", workspace_id)
-                await self._sync_workspace_skills(workspace_id, full=True)
+            # Skill 同步：每次消息到达都触发
+            # - 首次 session：全量拉取
+            # - 后续消息：增量拉取（基于 lastSync serverTime）
+            is_first = workspace_id not in self._skill_sync_state
+            if is_first:
+                logger.info("[Codeshark] First session for workspace %s, full sync", workspace_id)
+            await self._sync_workspace_skills(workspace_id, full=is_first)
 
             # /sync-skill 命令：强制全量刷新
             if text.strip() == "/sync-skill":
