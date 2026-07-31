@@ -1107,6 +1107,11 @@ class DingTalkAdapter(BasePlatformAdapter):
         """
         if not message_id:
             return SendResult(success=False, error="message_id required")
+        if not self._card_sdk:
+            return SendResult(
+                success=False,
+                error="AI Card SDK not available (no card_template_id configured)",
+            )
         token = await self._get_access_token()
         if not token:
             return SendResult(success=False, error="No access token")

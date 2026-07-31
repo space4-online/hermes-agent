@@ -14412,9 +14412,10 @@ class GatewayRunner:
                 return
 
             # Skip tool progress for platforms that don't support message
-            # editing (e.g. iMessage/BlueBubbles) — each progress update
+            # editing (e.g. iMessage/BlueBubbles, or DingTalk without card
+            # template configured) — each progress update
             # would become a separate message bubble, which is noisy.
-            if type(adapter).edit_message is BasePlatformAdapter.edit_message:
+            if type(adapter).edit_message is BasePlatformAdapter.edit_message or not getattr(adapter, "SUPPORTS_MESSAGE_EDITING", True):
                 while not progress_queue.empty():
                     try:
                         progress_queue.get_nowait()
