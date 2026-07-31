@@ -728,8 +728,21 @@ platforms:
       host: "127.0.0.1"         # Adapter listen host
       port: 8645                # Adapter listen port
       secret: "${CODESHARK_ADAPTER_SECRET:911f2af927be0b3a2a70c4700b9430877118826230b34b36194ebc97faefb2f5}"  # HMAC signing secret
-      bot_api_url: "https://dev.codeshark.cn/api"  # Backend Bot API base URL (预发环境公网域名)
-      bot_api_key: "${API_SERVER_KEY}"            # X-Bot-Api-Key for Bot API auth
+      # ---- 多后端配置（推荐） ----
+      # 后端推送消息时携带 "env" 字段，Hermes 据此路由回复/skill 同步到对应后端。
+      # 旧版单后端配置（bot_api_url + bot_api_key 放在 extra 顶层）仍然兼容，
+      # 会自动包装为 "default" backend。
+      backends:
+        dev:
+          bot_api_url: "https://dev.codeshark.cn/api"
+          bot_api_key: "${CODESHARK_BOT_API_KEY_DEV}"
+        prod:
+          bot_api_url: "https://codeshark.cn/api"
+          bot_api_key: "${CODESHARK_BOT_API_KEY_PROD}"
+      default_env: "dev"
+      # ---- 旧版单后端配置（兼容） ----
+      # bot_api_url: "https://dev.codeshark.cn/api"
+      # bot_api_key: "${API_SERVER_KEY}"
     session_reset:
       mode: idle
       idle_minutes: 30          # Reset session after 30min of inactivity

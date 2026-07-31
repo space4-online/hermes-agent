@@ -71,9 +71,30 @@ class CodesharkAdapter(BasePlatformAdapter):
         self._port = int(extra.get("port", os.getenv("CODESHARK_ADAPTER_PORT", str(DEFAULT_PORT))))
         self._secret = str(extra.get("secret", os.getenv("CODESHARK_ADAPTER_SECRET", "")))
 
-        # Bot API 配置（发送回复到后端）
-        self._bot_api_url = str(extra.get("bot_api_url", os.getenv("CODESHARK_BOT_API_URL", "")))
-        self._bot_api_key = str(extra.get("bot_api_key", os.getenv("CODESHARK_BOT_API_KEY", "")))
+        # 多后端配置（backends dict + 旧版单 backend 兼容）
+        backends = extra.get("backends", {})
+        if backends:
+            # 新配置：backends.dev / backends.prod
+            self._backends: Dict[str, Dict[str, str]] = {}
+            for env_name, env_cfg in backends.items():
+                self._backends[env_name] = {
+                    "bot_api_url": str(env_cfg.get("bot_api_url", "")),
+                    "bot_api_key": str(env_cfg.get("bot_api_key", "")),
+                }
+            # 默认 backend = 第一个
+            self._default_env = extra.get("default_env", list(self._backends.keys())[0])
+        else:
+            # 旧配置兼容：bot_api_url / bot_api_key 在 extra 顶层 → 包装为 "default" backend
+            legacy_url = str(extra.get("bot_api_url", os.getenv("CODESHARK_BOT_API_URL", "")))
+            legacy_key = str(extra.get("bot_api_key", os.getenv("CODESHARK_BOT_API_KEY", "")))
+            self._backends = {
+                "default": {"bot_api_url": legacy_url, "bot_api_key": legacy_key},
+            }
+            self._default_env = "default"
+
+        # 旧属性兼容（供外部代码可能引用）
+        self._bot_api_url = self._backends[self._default_env]["bot_api_url"]
+        self._bot_api_key = self._backends[self._default_env]["bot_api_key"]
 
         # aiohttp 运行时
         self._app = None
@@ -91,6 +112,24 @@ class CodesharkAdapter(BasePlatformAdapter):
         # 零信任代理令牌：每条消息携带，Agent 用完后丢弃
         self._delegation_token: Optional[str] = None
         self._delegation_expires: float = 0
+
+        # 工作区 → 后端环境映射：{workspace_id: env_name}
+        # 进程重启后由后续消息重建
+        self._backend_for_workspace: Dict[str, str] = {}
+
+    # ────────────────────────────────────────────────────────────
+    # Backend routing
+    # ────────────────────────────────────────────────────────────
+
+    def _get_backend(self, workspace_id: str, env_hint: Optional[str] = None) -> Dict[str, str]:
+        """返回 workspace_id 对应的 backend 配置。
+
+        优先级：env_hint > 已记录的 workspace 映射 > default_env
+        """
+        env = env_hint or self._backend_for_workspace.get(workspace_id) or self._default_env
+        if env not in self._backends:
+            env = self._default_env
+        return self._backends[env]
 
     # ────────────────────────────────────────────────────────────
     # Source building
@@ -182,21 +221,22 @@ class CodesharkAdapter(BasePlatformAdapter):
         full=True:  全量拉取（首次 session 或 /sync-skill 命令）
         full=False: 增量拉取（使用上次 serverTime）
         """
-        if not self._bot_api_url or not self._bot_api_key:
-            logger.warning("[Codeshark] Skill sync skipped: bot_api_url or bot_api_key not configured")
+        backend = self._get_backend(workspace_id)
+        bot_api_url = backend["bot_api_url"]
+        bot_api_key = backend["bot_api_key"]
+        if not bot_api_url or not bot_api_key:
+            logger.warning("[Codeshark] Skill sync skipped: bot_api_url or bot_api_key not configured for workspace %s", workspace_id)
             return
 
         state = self._skill_sync_state.get(workspace_id, {})
         since = 0 if full else state.get("lastSync", 0)
 
         try:
-            # 调用后端 API
-            # bot_api_url 格式: https://dev.codeshark.cn/api
-            # bot skill 端点: /v2/workspace/{wid}/bot/skills（BotApiKeyInterceptor 全局鉴权）
-            api_base = self._bot_api_url.rstrip("/")
+            # 调用后端 API — 按 workspace 路由到对应后端
+            api_base = bot_api_url.rstrip("/")
             url = f"{api_base}/v2/workspace/{workspace_id}/bot/skills?since={since}"
 
-            headers = {"X-Bot-Api-Key": self._bot_api_key}
+            headers = {"X-Bot-Api-Key": bot_api_key}
             async with self._http_session.get(url, headers=headers) as resp:
                 if resp.status != 200:
                     logger.warning("[Codeshark] Skill sync failed: HTTP %s", resp.status)
@@ -330,6 +370,11 @@ class CodesharkAdapter(BasePlatformAdapter):
             content = str(body.get("content", ""))
             message_type_raw = str(body.get("message_type", "TEXT")).upper()
 
+            # 记录 workspace 所属环境（由后端在推送消息中声明）
+            env_hint = body.get("env")
+            if env_hint:
+                self._backend_for_workspace[workspace_id] = str(env_hint)
+
             if not workspace_id or not content:
                 return web.json_response(
                     {"ok": False, "error": "missing workspace_id or content"}, status=400
@@ -376,8 +421,9 @@ class CodesharkAdapter(BasePlatformAdapter):
 
             # 注入 workspace 上下文
             workspace_dir = f"/opt/data/workspace/{workspace_id}"
-            api_url = self._bot_api_url or ""
-            api_key = self._bot_api_key or ""
+            backend = self._get_backend(workspace_id, env_hint)
+            api_url = backend["bot_api_url"]
+            api_key = backend["bot_api_key"]
             sync_base = (
                 f"python3 skills/codeshark/workspace-sync/scripts/ws_sync_cli.py"
                 f" --api-base-url {api_url}"
@@ -445,16 +491,20 @@ class CodesharkAdapter(BasePlatformAdapter):
           - card_type: CARD 消息的卡片类型（status/task/analysis/result）
           - 其他字段：透传给前端对应渲染组件
         """
-        if not self._bot_api_url:
-            logger.warning("[Codeshark] bot_api_url not configured, cannot send reply")
-            return SendResult(success=False, error="bot_api_url not configured")
-
         try:
             # 解析 workspace_id 和 conversation_id
             # chat_id 格式: codeshark:{wid} 或 codeshark:{wid}:{cid}
             _parts = chat_id.split(":") if ":" in chat_id else [chat_id]
             workspace_id = _parts[1] if len(_parts) >= 2 else _parts[0]
             conversation_id = _parts[2] if len(_parts) >= 3 else None
+
+            # 路由到正确的后端
+            backend = self._get_backend(workspace_id)
+            bot_api_url = backend["bot_api_url"]
+            bot_api_key = backend["bot_api_key"]
+            if not bot_api_url:
+                logger.warning("[Codeshark] bot_api_url not configured for workspace %s", workspace_id)
+                return SendResult(success=False, error="bot_api_url not configured")
 
             # ── 平台消息格式化（一站式：去内部块 + 转 ASCII）──
             raw_len = len(content)
@@ -512,13 +562,13 @@ class CodesharkAdapter(BasePlatformAdapter):
                 except (ValueError, TypeError):
                     pass
 
-            # 构造 Bot API URL（统一路径，Bot/User 双鉴权）
-            _api_base = self._bot_api_url.rstrip('/')
+            # 构造 Bot API URL（按 workspace 路由到对应后端）
+            _api_base = bot_api_url.rstrip('/')
             _cid = conversation_id or f"default-{workspace_id}"
             url = f"{_api_base}/v2/workspace/{workspace_id}/conversation/{_cid}/messages"
             headers = {
                 "Content-Type": "application/json",
-                "X-Bot-Api-Key": self._bot_api_key,
+                "X-Bot-Api-Key": bot_api_key,
             }
             if self._delegation_token:
                 headers["X-Bot-Proxy-Token"] = self._delegation_token
@@ -528,7 +578,7 @@ class CodesharkAdapter(BasePlatformAdapter):
                     if resp.status == 401 and self._delegation_token:
                         # 令牌过期，用 Bot 身份续期
                         refresh_url = f"{_api_base}/v2/workspace/bot/delegation/refresh"
-                        refresh_headers = {"Content-Type": "application/json", "X-Bot-Api-Key": self._bot_api_key}
+                        refresh_headers = {"Content-Type": "application/json", "X-Bot-Api-Key": bot_api_key}
                         try:
                             async with self._http_session.post(refresh_url,
                                     json={"userId": int(sender_id)}, headers=refresh_headers) as r:
