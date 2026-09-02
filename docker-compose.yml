@@ -77,6 +77,10 @@ services:
     image: hermes-agent
     container_name: hermes
     restart: unless-stopped
+    # gateway drain（restart_drain_timeout 默认 180s）需要 docker stop 留足时间：
+    # 默认 10s 宽限会在 drain 完成前 SIGKILL，导致 resume_pending 标记与
+    # 会话关闭通知来不及发出，重启后无法自动恢复被打断的任务。
+    stop_grace_period: 200s
     network_mode: host
     depends_on:
       mysql:
