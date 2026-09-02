@@ -387,13 +387,13 @@ class CodesharkAdapter(BasePlatformAdapter):
             self._delegation_token = body.get("delegation_token")
             self._delegation_expires = body.get("delegation_expires", 0)
 
-            # Skill 同步：每次消息到达都触发
+            # Skill 同步：后台异步执行，不阻塞消息处理链路
             # - 首次 session：全量拉取
             # - 后续消息：增量拉取（基于 lastSync serverTime）
             is_first = workspace_id not in self._skill_sync_state
             if is_first:
                 logger.info("[Codeshark] First session for workspace %s, full sync", workspace_id)
-            await self._sync_workspace_skills(workspace_id, full=is_first)
+            asyncio.create_task(self._sync_workspace_skills(workspace_id, full=is_first))
 
             # /sync-skill 命令：强制全量刷新
             if text.strip() == "/sync-skill":
